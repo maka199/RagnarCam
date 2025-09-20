@@ -14,6 +14,7 @@ export default function Monitor({ room }) {
   const [pcState, setPcState] = useState('new');
   const [iceState, setIceState] = useState('new');
   const [candidates, setCandidates] = useState(0);
+  const [audioInfo, setAudioInfo] = useState({ count: 0, enabled: false });
 
   useEffect(() => {
     let ws, pc, localStream;
@@ -25,6 +26,8 @@ export default function Monitor({ room }) {
           audio: { echoCancellation: true, noiseSuppression: true }
         });
   if (videoRef.current) videoRef.current.srcObject = localStream;
+  const aTracks = localStream.getAudioTracks();
+  setAudioInfo({ count: aTracks.length, enabled: aTracks[0]?.enabled ?? false });
   setStatus('Kamera igång – väntar på viewer…');
       } catch (err) {
         alert('Kunde inte starta kamera: ' + err.message);
@@ -55,7 +58,7 @@ export default function Monitor({ room }) {
           const msg = JSON.parse(event.data);
           if (msg.type === 'viewer-ready') {
             // Create offer when a viewer is present
-            const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+            const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             ws.send(JSON.stringify({ type: 'offer', room, payload: offer }));
             setStatus('Viewer ansluten – skickar offer…');
@@ -122,6 +125,8 @@ export default function Monitor({ room }) {
     const stream = videoRef.current?.srcObject;
     if (!stream) return;
     stream.getAudioTracks().forEach(t => t.enabled = !t.enabled);
+    const a = stream.getAudioTracks();
+    setAudioInfo({ count: a.length, enabled: a[0]?.enabled ?? false });
     setMicOn(prev => !prev);
   };
 

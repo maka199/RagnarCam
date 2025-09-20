@@ -12,6 +12,7 @@ export default function Viewer({ room }) {
   const [pcState, setPcState] = useState('new');
   const [iceState, setIceState] = useState('new');
   const [candidates, setCandidates] = useState(0);
+  const [audioInfo, setAudioInfo] = useState({ count: 0 });
 
   useEffect(() => {
     let ws, pc;
@@ -28,7 +29,9 @@ export default function Viewer({ room }) {
   pc.oniceconnectionstatechange = () => setIceState(pc.iceConnectionState);
 
       pc.ontrack = (event) => {
-        videoRef.current.srcObject = event.streams[0];
+        const stream = event.streams[0];
+        videoRef.current.srcObject = stream;
+        setAudioInfo({ count: stream.getAudioTracks().length });
       };
 
       ws.onmessage = async (event) => {
@@ -79,8 +82,12 @@ export default function Viewer({ room }) {
         WS: {wsState} | PC: {pcState} | ICE: {iceState} | ICE candidates: {candidates}
       </div>
       <div style={{ marginTop: 10 }}>
-        <button onClick={() => setMuted(m => !m)}>{muted ? 'Unmute' : 'Mute'}</button>
+        <button onClick={async () => {
+          setMuted(m => !m);
+          try { await videoRef.current.play(); } catch {}
+        }}>{muted ? 'Unmute' : 'Mute'}</button>
       </div>
+      <div style={{ fontSize: 12, color: '#555' }}>Remote audio tracks: {audioInfo.count}</div>
     </div>
   );
 }
