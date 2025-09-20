@@ -258,6 +258,17 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
       if (recordingRef.current) return;
       let stream = videoRef.current?.srcObject;
       if (!stream) return;
+      // Notify viewer to start local recording as a fallback and apply cooldown immediately
+      try {
+        const ts = Date.now();
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'record-trigger', room: roomRef.current, payload: { ts } }));
+          setStatus('Trigger skickad till viewer (fallback)…');
+        }
+      } catch {}
+      // Set cooldown now so we don't spam triggers even if local recorder fails
+      lastTrigger = Date.now();
       // helper to try types in order
       const tryStart = async (types) => {
         for (const m of types) {
@@ -288,7 +299,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         'video/webm'
       ];
       let picked = await tryStart(webmCandidates);
-      if (!picked) {
+        if (!picked) {
         // Fallback: prova spela in en komponerad ström (canvas video + original audio)
         try {
           const c = canvasRef.current;
@@ -310,7 +321,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
           // ignore and fall through
         }
         if (!picked) {
-          setStatus('Kunde inte starta inspelning (MediaRecorder stöds ej eller blockerad). Prova att starta om sidan och godkänn kamera/mikrofon).');
+          setStatus('Kunde inte starta inspelning lokalt. Viewer försöker spela in (fallback).');
           return;
         }
       }
@@ -358,18 +369,11 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         lastActiveTsRef.current = recStartTsRef.current;
   const label = recRef.current.mimeType || chosen || 'video/webm';
   setStatus(`Inspelning startad (${label})…`);
-        // Signal viewer to optionally start local recording as fallback
-        try {
-          const ws = wsRef.current;
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'record-trigger', room: roomRef.current, payload: { ts: recStartTsRef.current } }));
-          }
-        } catch {}
         const maxMsEff = (maxMs || 60000);
         stopTimerRef.current = setTimeout(() => { try { recRef.current?.stop(); } catch {} }, maxMsEff + 50);
       } catch (e) {
         console.error('MediaRecorder error', e);
-        setStatus('Kunde inte starta inspelning');
+        setStatus('Kunde inte starta inspelning lokalt. Viewer försöker spela in (fallback).');
       }
     };
 
