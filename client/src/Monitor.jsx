@@ -44,7 +44,10 @@ export default function Monitor({ room }) {
           video: { facingMode: { ideal: facingMode } },
           audio: { echoCancellation: true, noiseSuppression: true }
         });
-  if (videoRef.current) videoRef.current.srcObject = localStream;
+  if (videoRef.current) {
+    videoRef.current.srcObject = localStream;
+    try { await videoRef.current.play(); } catch {}
+  }
   const aTracks = localStream.getAudioTracks();
   setAudioInfo({ count: aTracks.length, enabled: aTracks[0]?.enabled ?? false });
   setStatus('Kamera igång – väntar på viewer…');
@@ -257,31 +260,45 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
     const recStartTsRef = { current: 0 };
     const lastActiveTsRef = { current: 0 };
 
-    const startRecording = () => {
+    const startRecording = async () => {
       if (recordingRef.current) return;
       const stream = videoRef.current?.srcObject;
       if (!stream) return;
-      try {
-        // Pick a supported mime type (prefer MP4 when requested)
-        const candidates = preferMp4
-          ? [
-              'video/mp4',
-              'video/webm;codecs=vp9,opus',
-              'video/webm;codecs=vp8,opus',
-              'video/webm'
-            ]
-          : [
-              'video/webm;codecs=vp9,opus',
-              'video/webm;codecs=vp8,opus',
-              'video/webm',
-              'video/mp4'
-            ];
-        let chosen;
-        for (const m of candidates) {
-          if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) { chosen = m; break; }
+      // helper to try types in order
+      const tryStart = async (types) => {
+        for (const m of types) {
+          try {
+            if (m && (!MediaRecorder.isTypeSupported || !MediaRecorder.isTypeSupported(m))) continue;
+            const options = m ? { mimeType: m } : undefined;
+            const rec = new MediaRecorder(stream, options);
+            return { rec, chosen: m };
+          } catch (e) {
+            // try next
+          }
         }
-        const options = chosen ? { mimeType: chosen } : undefined;
-        const rec = new MediaRecorder(stream, options);
+        // last resort: no options
+        try {
+          const rec = new MediaRecorder(stream);
+          return { rec, chosen: null };
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const mp4First = [ 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm' ];
+      const webmFirst = [ 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4' ];
+      let picked = await tryStart(preferMp4 ? mp4First : webmFirst);
+      if (!picked && preferMp4) {
+        // fallback from mp4-first to webm-first
+        picked = await tryStart(webmFirst);
+      }
+      if (!picked) {
+        setStatus('Inspelning stöds inte på denna enhet');
+        return;
+      }
+
+      try {
+        const { rec, chosen } = picked;
         recRef.current = rec;
         recChunksRef.current = [];
         rec.ondataavailable = e => { if (e.data && e.data.size) recChunksRef.current.push(e.data); };
@@ -306,16 +323,31 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
           recordingRef.current = false;
           lastTrigger = Date.now();
         };
-        rec.start(1000); // gather data every second
+        try {
+          rec.start(1000);
+        } catch (e) {
+          // retry with webm list if mp4-first failed to start
+          if (preferMp4) {
+            const fallback = await tryStart(webmFirst);
+            if (!fallback) throw e;
+            recRef.current = fallback.rec;
+            recChunksRef.current = [];
+            recRef.current.ondataavailable = rec.ondataavailable;
+            recRef.current.onstop = rec.onstop;
+            recRef.current.start(1000);
+          } else {
+            throw e;
+          }
+        }
         recordingRef.current = true;
         recStartTsRef.current = Date.now();
         lastActiveTsRef.current = recStartTsRef.current;
         setStatus('Inspelning startad…');
-        // Explicit stop at max length to guarantee fixed length when extendOnActivity=false
         const maxMsEff = (maxMs || 60000);
-        stopTimerRef.current = setTimeout(() => { try { rec.stop(); } catch {} }, maxMsEff + 50);
+        stopTimerRef.current = setTimeout(() => { try { recRef.current?.stop(); } catch {} }, maxMsEff + 50);
       } catch (e) {
         console.error('MediaRecorder error', e);
+        setStatus('Kunde inte starta inspelning');
       }
     };
 
