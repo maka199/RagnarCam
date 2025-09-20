@@ -268,32 +268,35 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
       const tryStart = async (types) => {
         for (const m of types) {
           try {
-            if (m && (!MediaRecorder.isTypeSupported || !MediaRecorder.isTypeSupported(m))) continue;
+            if (m && MediaRecorder.isTypeSupported && !MediaRecorder.isTypeSupported(m)) continue;
             const options = m ? { mimeType: m } : undefined;
             const rec = new MediaRecorder(stream, options);
+            console.debug('[record] Using mime:', m || '(default)');
             return { rec, chosen: m };
           } catch (e) {
+            console.debug('[record] Failed mime:', m, e?.message || e);
             // try next
           }
         }
         // last resort: no options
         try {
           const rec = new MediaRecorder(stream);
+          console.debug('[record] Using fallback default mime');
           return { rec, chosen: null };
         } catch (e) {
           return null;
         }
       };
 
-      const mp4First = [ 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm' ];
-      const webmFirst = [ 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4' ];
+      const mp4First = [ null, 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm' ];
+      const webmFirst = [ null, 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4' ];
       let picked = await tryStart(preferMp4 ? mp4First : webmFirst);
       if (!picked && preferMp4) {
         // fallback from mp4-first to webm-first
         picked = await tryStart(webmFirst);
       }
       if (!picked) {
-        setStatus('Inspelning stöds inte på denna enhet');
+        setStatus('Kunde inte starta inspelning (MediaRecorder stöds ej eller blockerad). Prova att starta om sidan och godkänn kamera/mikrofon).');
         return;
       }
 
@@ -342,7 +345,8 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         recordingRef.current = true;
         recStartTsRef.current = Date.now();
         lastActiveTsRef.current = recStartTsRef.current;
-        setStatus('Inspelning startad…');
+  const label = recRef.current.mimeType || chosen || 'okänd';
+  setStatus(`Inspelning startad (${label})…`);
         const maxMsEff = (maxMs || 60000);
         stopTimerRef.current = setTimeout(() => { try { recRef.current?.stop(); } catch {} }, maxMsEff + 50);
       } catch (e) {
