@@ -9,6 +9,7 @@ const app = express();
 app.use(cors());
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+const FIXED_ROOM = process.env.ROOM_ID || process.env.ROOM || null;
 
 // Room state: one monitor + one viewer per room (simple 1:1)
 // rooms[roomId] = { monitor: WebSocket|null, viewer: WebSocket|null }
@@ -33,12 +34,18 @@ wss.on('connection', (ws) => {
     }
 
     const { type, room, payload, role } = data || {};
-    if (!room) return;
-    const r = getRoom(room);
+    // Enforce fixed room if configured
+    const effectiveRoom = FIXED_ROOM || room;
+    if (!effectiveRoom) return;
+    if (FIXED_ROOM && room && room !== FIXED_ROOM) {
+      // Optionally inform client of enforced room
+      safeSend(ws, { type: 'room-overridden', payload: { room: FIXED_ROOM } });
+    }
+    const r = getRoom(effectiveRoom);
 
     // First, handle join and role assignment
     if (type === 'join' && (role === 'monitor' || role === 'viewer')) {
-      ws.room = room;
+      ws.room = effectiveRoom;
       ws.role = role;
       if (role === 'monitor') {
         // Replace any existing monitor

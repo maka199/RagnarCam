@@ -1,10 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Monitor from './Monitor';
 import Viewer from './Viewer';
 
 export default function App() {
   const [role, setRole] = useState(null);
   const [room, setRoom] = useState('');
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlRoom = params.get('room') || params.get('r');
+    const envRoom = import.meta.env.VITE_DEFAULT_ROOM;
+    const initial = urlRoom || envRoom || '';
+    if (initial) setRoom(initial);
+  }, []);
 
   if (!role) {
     return (

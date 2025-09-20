@@ -75,3 +75,7 @@ Alternativ B: Två tjänster (en för klient, en för signalering), sätt `VITE_
 2. Deploya klienten (client/) som statisk site. Vid build, ange env:
 	- `VITE_SIGNALING_ORIGIN=https://din-signalering.example.com`
 3. Klienten kopplar då sin WS mot angiven origin (wss).
+
+### Fast rum (ROOM_ID)
+- Om du sätter `ROOM_ID` (eller `ROOM`) som env i Render så tvingar servern alla anslutningar till det rummet.
+- Klienten kan förifylla rummet via URL `?room=<namn>` eller env `VITE_DEFAULT_ROOM` (vid build).
