@@ -20,11 +20,11 @@ export default function Viewer({ room }) {
   useEffect(() => {
     let ws, pc;
     (async () => {
-  ws = new WebSocket(getWsUrl());
-      wsRef.current = ws;
-  ws.onopen = () => setWsState('OPEN');
-  ws.onclose = () => setWsState('CLOSED');
-  ws.onerror = () => setWsState('ERROR');
+    ws = new WebSocket(getWsUrl());
+    wsRef.current = ws;
+    ws.addEventListener('open', () => setWsState('OPEN'));
+    ws.addEventListener('close', () => setWsState('CLOSED'));
+    ws.addEventListener('error', () => setWsState('ERROR'));
       const iceServers = await fetchIceServers();
   pc = new RTCPeerConnection({ iceServers });
       pcRef.current = pc;
@@ -63,10 +63,10 @@ export default function Viewer({ room }) {
         }
       };
 
-      ws.onopen = () => {
+      ws.addEventListener('open', () => {
         // Join as viewer
-        ws.send(JSON.stringify({ type: 'join', role: 'viewer', room }));
-      };
+        try { ws.send(JSON.stringify({ type: 'join', role: 'viewer', room })); } catch {}
+      });
     })();
 
     return () => {

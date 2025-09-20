@@ -45,11 +45,11 @@ export default function Monitor({ room }) {
       }
 
       try {
-        ws = new WebSocket(getWsUrl());
-  wsRef.current = ws;
-  ws.onopen = () => setWsState('OPEN');
-  ws.onclose = () => setWsState('CLOSED');
-  ws.onerror = () => setWsState('ERROR');
+    ws = new WebSocket(getWsUrl());
+    wsRef.current = ws;
+    ws.addEventListener('open', () => { setWsState('OPEN'); setStatus('Ansluter till signalserver…'); });
+    ws.addEventListener('close', () => { setWsState('CLOSED'); setStatus('WS stängd'); });
+    ws.addEventListener('error', () => { setWsState('ERROR'); setStatus('WS-fel'); });
 
         const iceServers = await fetchIceServers();
         pc = new RTCPeerConnection({ iceServers });
@@ -58,10 +58,10 @@ export default function Monitor({ room }) {
   pc.oniceconnectionstatechange = () => setIceState(pc.iceConnectionState);
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-        ws.onopen = () => {
+        ws.addEventListener('open', () => {
           // Join as monitor
-          ws.send(JSON.stringify({ type: 'join', role: 'monitor', room }));
-        };
+          try { ws.send(JSON.stringify({ type: 'join', role: 'monitor', room })); } catch {}
+        });
 
         ws.onmessage = async (event) => {
           const msg = JSON.parse(event.data);
@@ -241,6 +241,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         setTimeout(() => { try { rec.stop(); } catch {} }, 30000);
       } catch (e) {
         console.error('MediaRecorder error', e);
+        setStatus(`Kunde inte starta inspelning: ${e?.name || 'Error'} ${e?.message || ''}`.trim());
       }
     };
 
