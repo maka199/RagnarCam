@@ -296,8 +296,29 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         picked = await tryStart(webmFirst);
       }
       if (!picked) {
-        setStatus('Kunde inte starta inspelning (MediaRecorder stöds ej eller blockerad). Prova att starta om sidan och godkänn kamera/mikrofon).');
-        return;
+        // Fallback: prova spela in en komponerad ström (canvas video + original audio)
+        try {
+          const c = canvasRef.current;
+          const v = videoRef.current;
+          if (c && v) {
+            const canvasStream = c.captureStream(15);
+            const audioTracks = (stream.getAudioTracks && stream.getAudioTracks()) ? stream.getAudioTracks() : [];
+            const composed = new MediaStream([ ...canvasStream.getVideoTracks(), ...audioTracks ]);
+            const composedPicked = await tryStart(webmFirst);
+            if (composedPicked) {
+              // Switch to composed stream for recording
+              stream = composed;
+              picked = composedPicked;
+              setStatus('Inspelning via canvas-fallback…');
+            }
+          }
+        } catch (e) {
+          // ignore and fall through
+        }
+        if (!picked) {
+          setStatus('Kunde inte starta inspelning (MediaRecorder stöds ej eller blockerad). Prova att starta om sidan och godkänn kamera/mikrofon).');
+          return;
+        }
       }
 
       try {
