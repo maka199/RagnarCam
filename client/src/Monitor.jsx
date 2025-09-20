@@ -16,6 +16,7 @@ export default function Monitor({ room }) {
   const [candidates, setCandidates] = useState(0);
   const [audioInfo, setAudioInfo] = useState({ count: 0, enabled: false });
   const [autoRec, setAutoRec] = useState(true);
+  const manualStartRef = useRef(null);
   const canvasRef = useRef();
   const lastFrameRef = useRef(null);
   const recRef = useRef(null);
@@ -145,8 +146,8 @@ export default function Monitor({ room }) {
     setCamOn(prev => !prev);
   };
 
-  // Start motion/sound triggers when enabled
-  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, autoRec);
+  // Start motion/sound triggers when enabled and expose manual start regardless of autoRec
+  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, autoRec, undefined, manualStartRef);
 
   return (
     <div style={{ textAlign: 'center', marginTop: 40 }}>
@@ -168,22 +169,28 @@ export default function Monitor({ room }) {
           Autoinspelning (rörelse/ljud)
         </label>
       </div>
+      <div style={{ marginTop: 10 }}>
+        <button onClick={() => manualStartRef.current && manualStartRef.current()}>
+          Spela in nu (test)
+        </button>
+      </div>
     </div>
   );
 }
 
 // Motion + audio trigger hook
-function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled) {
+function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled, settings, manualStartRef) {
   useEffect(() => {
-    if (!enabled) return;
     let rafId, audioCtx, analyser, dataArray;
     let lastTrigger = 0;
-    const motionThresh = 20; // avg diff threshold
-    const audioThresh = 0.08; // RMS threshold
-    const cooldownMs = 10000; // 10s between recordings
+    const motionThresh = 20; // avg diff threshold (default)
+    const audioThresh = 0.08; // RMS threshold (default)
+    const cooldownMs = 10000; // 10s between recordings (default)
 
+    let arming = false;
     const startRecording = () => {
       if (recordingRef.current) return;
+      if (arming) return;
       const stream = videoRef.current?.srcObject;
       if (!stream) return;
       try {
@@ -221,18 +228,29 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
             setStatus('Kunde inte ladda upp klipp');
           }
           recordingRef.current = false;
+          // start cooldown from clip end so nästa trigger kan ske efter paus
+          try { /* ensure recorder is cleared */ recRef.current = null; } catch {}
+          // mark senaste trigger som nu (slutet av klipp)
+          try { lastTrigger = Date.now(); } catch {}
         };
         rec.start();
         recordingRef.current = true;
-        setStatus('Inspelning startad…');
-        // Stop after 8 seconds
-        setTimeout(() => { try { rec.stop(); } catch {} }, 8000);
+        arming = false;
+  setStatus('Inspelning startad…');
+        // Stop after 30 seconds
+        setTimeout(() => { try { rec.stop(); } catch {} }, 30000);
       } catch (e) {
         console.error('MediaRecorder error', e);
       }
     };
 
+    // Always expose manual start
+    if (manualStartRef) {
+      manualStartRef.current = () => startRecording();
+    }
+
     const tick = () => {
+      if (!enabled) { rafId = requestAnimationFrame(tick); return; }
       const v = videoRef.current;
       const c = canvasRef.current;
       if (v && c) {
@@ -262,6 +280,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
           const audioHit = rms > audioThresh;
           if ((motionHit || audioHit) && now - lastTrigger > cooldownMs) {
             lastTrigger = now;
+            arming = true;
             startRecording();
           }
         }
@@ -283,11 +302,14 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
       } catch {}
     };
 
-    setupAudio();
+    if (enabled) {
+      setupAudio();
+    }
     rafId = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(rafId);
       try { audioCtx?.close(); } catch {}
+      if (manualStartRef) manualStartRef.current = null;
     };
-  }, [videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled]);
+  }, [videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled, manualStartRef]);
 }
