@@ -105,8 +105,7 @@ Framtida förbättring: Det går att bygga ut servern för flera monitorer i sam
 ### Spara klipp till din enhet
 - I Viewer finns knappar för “Ladda ner” (hämtar filen lokalt) och “Dela” (via Web Share API om enheten stöder det). På iOS/Android öppnas då systemets delningsdialog.
 - Om “Dela” inte stöds kan du alltid klicka fil-länken och använda webbläsarens egna “Spara”/“Ladda ned”.
-- Filformat kan vara `.webm` eller `.mp4` beroende på vilken plattform som spelat in. De flesta moderna webbläsare spelar åtminstone `.mp4`, medan `.webm` fungerar utmärkt på Android/Chrome och moderna desktop-browser.
- - Filformat kan vara `.webm` eller `.mp4` beroende på vilken plattform som spelat in. De flesta moderna webbläsare spelar åtminstone `.mp4`, medan `.webm` fungerar utmärkt på Android/Chrome och moderna desktop-browser. iOS kan ha begränsat stöd för `.webm` efter nedladdning—spela då klippet i appen, öppna i Safari eller dela till VLC/Infuse.
+- Filformat är `.webm` (WebM/Opus/VP8/VP9). Det fungerar utmärkt i Android/Chrome och moderna desktop-browser. iOS kan ha begränsat stöd för `.webm` efter nedladdning—spela klippet i appen, öppna i Safari eller dela till VLC/Infuse.
 
 ### Inspelningsformat
-- Monitorn försöker spela in i MP4 när möjligt (ny inställning “Föredra MP4”). När MP4 inte stöds faller den tillbaka till WEBM.
+- Monitorn spelar in i WEBM. Detta är mest kompatibelt som webb-API idag och fungerar bra i moderna webbläsare. På iOS kan uppspelning av nedsparade `.webm`-filer vara begränsad – använd inline-uppspelning i appen eller dela till VLC/Infuse om behövs.

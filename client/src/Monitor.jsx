@@ -23,8 +23,7 @@ export default function Monitor({ room }) {
     calmMs: 2000,         // stop N ms efter att aktivitet upphört
     maxMs: 60000,         // max klipplängd (1 min)
     cooldownMs: 10000,    // min tid mellan klipp
-    extendOnActivity: false, // förläng klipp så länge aktivitet pågår
-    preferMp4: true        // försök spela in som MP4 när möjligt (för iOS-kompatibilitet)
+    extendOnActivity: false // förläng klipp så länge aktivitet pågår
   });
   const canvasRef = useRef();
   const lastFrameRef = useRef(null);
@@ -230,12 +229,7 @@ export default function Monitor({ room }) {
                   style={{ marginRight: 6 }} />
                 Förläng medan det är aktivitet
               </label>
-              <label style={{ gridColumn: '1 / span 2' }}>
-                <input type="checkbox" checked={settings.preferMp4}
-                  onChange={e => setSettings(s => ({ ...s, preferMp4: e.target.checked }))}
-                  style={{ marginRight: 6 }} />
-                Föredra MP4 (när möjligt)
-              </label>
+              
               <label style={{ opacity: settings.extendOnActivity ? 1 : 0.5 }}>
                 Calm timeout (ms)
                 <input type="number" min={500} max={10000} step={100} value={settings.calmMs}
@@ -256,7 +250,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
     if (!enabled) return;
     let rafId, audioCtx, analyser, dataArray;
     let lastTrigger = 0;
-  const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs, extendOnActivity, preferMp4 } = settings || {};
+  const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs, extendOnActivity } = settings || {};
     const recStartTsRef = { current: 0 };
     const lastActiveTsRef = { current: 0 };
 
@@ -288,26 +282,12 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         }
       };
 
-      const mp4Candidates = [
-        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-        'video/mp4;codecs=avc1.4D401E,mp4a.40.2',
-        'video/mp4;codecs=avc1.64001E,mp4a.40.2',
-        'video/mp4;codecs=avc1.42E01E',
-        'video/mp4;codecs=avc1.4D401E',
-        'video/mp4;codecs=avc1.64001E',
-        // Some browsers only accept generic mp4 without explicit codecs
-        'video/mp4'
-      ];
       const webmCandidates = [
         'video/webm;codecs=vp9,opus',
         'video/webm;codecs=vp8,opus',
         'video/webm'
       ];
-      let picked = await tryStart(preferMp4 ? mp4Candidates : webmCandidates);
-      if (!picked) {
-        // try the other family
-        picked = await tryStart(preferMp4 ? webmCandidates : mp4Candidates);
-      }
+      let picked = await tryStart(webmCandidates);
       if (!picked) {
         // Fallback: prova spela in en komponerad ström (canvas video + original audio)
         try {
@@ -317,11 +297,8 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
             const canvasStream = c.captureStream(15);
             const audioTracks = (stream.getAudioTracks && stream.getAudioTracks()) ? stream.getAudioTracks() : [];
             const composed = new MediaStream([ ...canvasStream.getVideoTracks(), ...audioTracks ]);
-            // Try again on composed stream, first with preferred family
-            let composedPicked = await tryStart(preferMp4 ? mp4Candidates : webmCandidates);
-            if (!composedPicked) {
-              composedPicked = await tryStart(preferMp4 ? webmCandidates : mp4Candidates);
-            }
+            // Try again on composed stream with WebM only
+            let composedPicked = await tryStart(webmCandidates);
             if (composedPicked) {
               // Switch to composed stream for recording
               stream = composed;
@@ -345,12 +322,12 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         rec.ondataavailable = e => { if (e.data && e.data.size) recChunksRef.current.push(e.data); };
         rec.onstop = async () => {
           if (stopTimerRef.current) { clearTimeout(stopTimerRef.current); stopTimerRef.current = null; }
-          const outType = chosen && chosen.includes('mp4') ? 'video/mp4' : 'video/webm';
+          const outType = 'video/webm';
           const blob = new Blob(recChunksRef.current, { type: outType });
           recChunksRef.current = [];
           const ts = Date.now();
           try {
-            const ext = outType === 'video/mp4' ? 'mp4' : 'webm';
+            const ext = 'webm';
             await fetch(`/api/upload-clip?room=${encodeURIComponent(roomRef.current)}&ts=${ts}&ext=${ext}`, {
               method: 'POST',
               headers: { 'Content-Type': outType },
@@ -367,23 +344,19 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         try {
           rec.start(1000);
         } catch (e) {
-          // retry with webm list if mp4-first failed to start
-          if (preferMp4) {
-            const fallback = await tryStart(webmFirst);
-            if (!fallback) throw e;
-            recRef.current = fallback.rec;
-            recChunksRef.current = [];
-            recRef.current.ondataavailable = rec.ondataavailable;
-            recRef.current.onstop = rec.onstop;
-            recRef.current.start(1000);
-          } else {
-            throw e;
-          }
+          // retry with webm list (only)
+          const fallback = await tryStart(webmCandidates);
+          if (!fallback) throw e;
+          recRef.current = fallback.rec;
+          recChunksRef.current = [];
+          recRef.current.ondataavailable = rec.ondataavailable;
+          recRef.current.onstop = rec.onstop;
+          recRef.current.start(1000);
         }
         recordingRef.current = true;
         recStartTsRef.current = Date.now();
         lastActiveTsRef.current = recStartTsRef.current;
-  const label = recRef.current.mimeType || chosen || 'okänd';
+  const label = recRef.current.mimeType || chosen || 'video/webm';
   setStatus(`Inspelning startad (${label})…`);
         // Signal viewer to optionally start local recording as fallback
         try {
