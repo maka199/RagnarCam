@@ -93,7 +93,6 @@ wss.on('connection', (ws) => {
   });
 });
 
-app.get('/', (req, res) => res.send('RagnarCam signaling server running'));
 app.get('/healthz', (req, res) => res.json({ status: 'ok' }));
 
 // Provide ICE server config to clients
@@ -125,7 +124,7 @@ const __dirname = path.dirname(__filename);
 const staticDir = path.join(__dirname, '../client-dist');
 app.use(express.static(staticDir));
 app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/config')) return next();
+  if (req.path.startsWith('/config') || req.path.startsWith('/healthz')) return next();
   const indexPath = path.join(staticDir, 'index.html');
   res.sendFile(indexPath, (err) => {
     if (err) next();
