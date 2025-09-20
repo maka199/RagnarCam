@@ -4,6 +4,8 @@ import { WebSocketServer } from 'ws';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
+import fsp from 'fs/promises';
 
 const app = express();
 app.use(cors());
@@ -124,8 +126,58 @@ const __dirname = path.dirname(__filename);
 const staticDir = path.join(__dirname, './client-dist');
 app.get('/favicon.ico', (_req, res) => res.sendStatus(204));
 app.use(express.static(staticDir));
+
+// ---- Clips storage (simple local filesystem) ----
+const clipsRoot = path.join(__dirname, './clips');
+if (!fs.existsSync(clipsRoot)) fs.mkdirSync(clipsRoot, { recursive: true });
+
+// Serve clips statically
+app.use('/clips', express.static(clipsRoot));
+
+// List clips for a room
+app.get('/api/clips/:room', async (req, res) => {
+  const room = (req.params.room || '').trim();
+  if (!room) return res.json([]);
+  try {
+    const dir = path.join(clipsRoot, room);
+    const files = await fsp.readdir(dir).catch(() => []);
+    const items = files
+      .filter(f => f.endsWith('.webm') || f.endsWith('.mp4'))
+      .map(f => ({
+        file: f,
+        url: `/clips/${encodeURIComponent(room)}/${encodeURIComponent(f)}`,
+        ts: Number(f.split('_')[0]) || null
+      }))
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    res.json(items);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Upload clip: POST /api/upload-clip?room=XYZ&ts=1690000000000&ext=webm
+// Body: raw binary (video/webm or application/octet-stream)
+app.post('/api/upload-clip', express.raw({ type: '*/*', limit: process.env.MAX_CLIP_SIZE || '100mb' }), async (req, res) => {
+  try {
+    const room = (req.query.room || FIXED_ROOM || '').toString().trim();
+    if (!room) return res.status(400).json({ error: 'room required' });
+    const ts = Number(req.query.ts) || Date.now();
+    const ext = ((req.query.ext || '').toString().toLowerCase()) || (req.headers['content-type']?.includes('mp4') ? 'mp4' : 'webm');
+    const dir = path.join(clipsRoot, room);
+    await fsp.mkdir(dir, { recursive: true });
+    const filename = `${ts}_clip.${ext}`;
+    const filepath = path.join(dir, filename);
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty body' });
+    await fsp.writeFile(filepath, req.body);
+    res.json({ ok: true, url: `/clips/${encodeURIComponent(room)}/${encodeURIComponent(filename)}` });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// SPA fallback (must be after APIs). Exclude known API/static paths.
 app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/config') || req.path.startsWith('/healthz')) return next();
+  if (req.path.startsWith('/config') || req.path.startsWith('/healthz') || req.path.startsWith('/api') || req.path.startsWith('/clips')) return next();
   const indexPath = path.join(staticDir, 'index.html');
   res.sendFile(indexPath, (err) => {
     if (err) next();

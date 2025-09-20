@@ -13,6 +13,9 @@ export default function Viewer({ room }) {
   const [iceState, setIceState] = useState('new');
   const [candidates, setCandidates] = useState(0);
   const [audioInfo, setAudioInfo] = useState({ count: 0 });
+  const [clips, setClips] = useState([]);
+  const [selectedClip, setSelectedClip] = useState(null);
+  const [sharingSupport, setSharingSupport] = useState({ url: false, files: false });
 
   useEffect(() => {
     let ws, pc;
@@ -73,6 +76,80 @@ export default function Viewer({ room }) {
     };
   }, [room]);
 
+  useEffect(() => {
+    // Detect Web Share support
+    const urlShare = !!navigator.share;
+    const filesShare = typeof navigator.canShare === 'function' && navigator.canShare({ files: [new File(['x'], 'x.txt', { type: 'text/plain' })] });
+    setSharingSupport({ url: urlShare, files: filesShare });
+  }, []);
+
+  const inferMimeFromUrl = (url) => {
+    try {
+      const u = new URL(url, window.location.href);
+      const ext = (u.pathname.split('.').pop() || '').toLowerCase();
+      if (ext === 'mp4') return 'video/mp4';
+      if (ext === 'webm') return 'video/webm';
+    } catch {}
+    return 'application/octet-stream';
+  };
+
+  const downloadClip = async (clip) => {
+    try {
+      const res = await fetch(clip.url);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = clip.file;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e) {
+      console.error('Download failed', e);
+      alert('Kunde inte ladda ner klipp. Prova att öppna länken och spara därifrån.');
+    }
+  };
+
+  const shareClip = async (clip) => {
+    try {
+      if (!navigator.share) {
+        // Fallback: try opening native share with URL (some browsers support this)
+        alert('Delning stöds inte på denna enhet. Prova att ladda ner klippet istället.');
+        return;
+      }
+      // Try share with file first if supported
+      const res = await fetch(clip.url);
+      const blob = await res.blob();
+      const mime = inferMimeFromUrl(clip.url) || blob.type || 'application/octet-stream';
+      const file = new File([blob], clip.file, { type: mime });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'RagnarCam klipp', text: clip.file });
+      } else {
+        // Fallback: share URL
+        await navigator.share({ title: 'RagnarCam klipp', url: new URL(clip.url, window.location.href).toString() });
+      }
+    } catch (e) {
+      // User cancel or not supported
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/clips/${encodeURIComponent(room)}`);
+        const data = await res.json();
+        if (!cancelled) setClips(data);
+      } catch (e) {
+        // ignore
+      }
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [room]);
+
   return (
     <div style={{ textAlign: 'center', marginTop: 40 }}>
       <h2>Viewer ({room})</h2>
@@ -88,6 +165,44 @@ export default function Viewer({ room }) {
         }}>{muted ? 'Unmute' : 'Mute'}</button>
       </div>
       <div style={{ fontSize: 12, color: '#555' }}>Remote audio tracks: {audioInfo.count}</div>
+      <div style={{ marginTop: 24, textAlign: 'left', maxWidth: 600, marginInline: 'auto' }}>
+        <h3>Klipp</h3>
+        <div style={{ marginBottom: 8 }}>
+          <button onClick={async () => {
+            try {
+              const res = await fetch(`/api/clips/${encodeURIComponent(room)}`);
+              setClips(await res.json());
+            } catch {}
+          }}>Uppdatera lista</button>
+        </div>
+        {clips.length === 0 ? (
+          <div style={{ fontSize: 14, color: '#666' }}>Inga klipp ännu.</div>
+        ) : (
+          <ul style={{ listStyle: 'none', padding: 0 }}>
+            {clips.map((c) => (
+              <li key={c.file} style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <a href={c.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 220 }}>
+                  {new Date(c.ts || Date.now()).toLocaleString()} – {c.file}
+                </a>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => setSelectedClip(c)}>Spela här</button>
+                  <button onClick={() => downloadClip(c)}>Ladda ner</button>
+                  <button onClick={() => shareClip(c)} disabled={!sharingSupport.url}>Dela</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {selectedClip && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong>Spelar: {selectedClip.file}</strong>
+              <button onClick={() => setSelectedClip(null)}>Stäng</button>
+            </div>
+            <video src={selectedClip.url} style={{ width: '100%', maxWidth: 600 }} controls playsInline />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

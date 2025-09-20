@@ -6,6 +6,7 @@ Enkel hundmonitor med WebRTC mellan en mobil (Monitor) och en tittare (Viewer). 
 - Monitor (mobil) publicerar kamera + mikrofon via WebRTC
 - Viewer tar emot strömmen i webbläsare
 - Enkel rooms-modell (1 monitor + 1 viewer per rum)
+ - Autoinspelning av klipp vid rörelse/ljud (lagras lokalt på servern)
 
 ## Kör lokalt
 Öppna två terminaler:
@@ -79,3 +80,22 @@ Alternativ B: Två tjänster (en för klient, en för signalering), sätt `VITE_
 ### Fast rum (ROOM_ID)
 - Om du sätter `ROOM_ID` (eller `ROOM`) som env i Render så tvingar servern alla anslutningar till det rummet.
 - Klienten kan förifylla rummet via URL `?room=<namn>` eller env `VITE_DEFAULT_ROOM` (vid build).
+
+## Autoinspelning (rörelse/ljud)
+
+Monitor-sidan har en checkbox “Autoinspelning (rörelse/ljud)”. När den är på:
+- En enkel rörelsedetektering körs via canvas-frame-diff på en nedskalad bild.
+- Ljudnivå mäts via Web Audio (RMS). Om rörelse eller ljud överstiger tröskelvärden startas en inspelning.
+- En kort inspelning (ca 8s) görs lokalt via `MediaRecorder` och laddas upp till servern.
+- För att undvika spam finns en cooldown (10s) mellan klipp.
+
+Klipp lagras på serverns filsystem under `server/clips/<room>/` och exponeras som URLs under `/clips/<room>/<fil>`. Viewer-sidan har en “Klipp”-sektion som listar och spelar upp klipp. API:n är:
+- `GET /api/clips/:room` – listar senaste klipp
+- `POST /api/upload-clip?room=...&ts=...&ext=webm|mp4` – rå binär kropp (Content-Type matchar filtyp)
+
+Viktigt om Render (gratisnivå): Render’s filsystem är ephemeralt och kan nollställas vid omdeploy/omstart. Det innebär att klipp inte är garanterat persistenta utan kostnad. Om du behöver beständig lagring, koppla upp mot ett kostnadsfritt eller lågkostnads-objektlager (t.ex. S3 kompatibelt). Vi kan lägga till en enkel S3-uppladdning senare om du vill.
+
+### Spara klipp till din enhet
+- I Viewer finns knappar för “Ladda ner” (hämtar filen lokalt) och “Dela” (via Web Share API om enheten stöder det). På iOS/Android öppnas då systemets delningsdialog.
+- Om “Dela” inte stöds kan du alltid klicka fil-länken och använda webbläsarens egna “Spara”/“Ladda ned”.
+- Filformat kan vara `.webm` eller `.mp4` beroende på vilken plattform som spelat in. De flesta moderna webbläsare spelar åtminstone `.mp4`, medan `.webm` fungerar utmärkt på Android/Chrome och moderna desktop-browser.

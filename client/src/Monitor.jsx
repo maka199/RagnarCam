@@ -15,6 +15,14 @@ export default function Monitor({ room }) {
   const [iceState, setIceState] = useState('new');
   const [candidates, setCandidates] = useState(0);
   const [audioInfo, setAudioInfo] = useState({ count: 0, enabled: false });
+  const [autoRec, setAutoRec] = useState(true);
+  const canvasRef = useRef();
+  const lastFrameRef = useRef(null);
+  const recRef = useRef(null);
+  const recChunksRef = useRef([]);
+  const recordingRef = useRef(false);
+  const roomRef = useRef(room);
+  useEffect(() => { roomRef.current = room; }, [room]);
 
   useEffect(() => {
     let ws, pc, localStream;
@@ -137,10 +145,14 @@ export default function Monitor({ room }) {
     setCamOn(prev => !prev);
   };
 
+  // Start motion/sound triggers when enabled
+  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, autoRec);
+
   return (
     <div style={{ textAlign: 'center', marginTop: 40 }}>
       <h2>Monitor ({room})</h2>
       <video ref={videoRef} autoPlay playsInline muted style={{ width: '80%', maxWidth: 500 }} />
+      <canvas ref={canvasRef} width={320} height={180} style={{ display: 'none' }} />
       <p>{status}</p>
       <div style={{ fontSize: 12, color: '#555' }}>
         WS: {wsState} | PC: {pcState} | ICE: {iceState} | ICE candidates: {candidates}
@@ -150,6 +162,132 @@ export default function Monitor({ room }) {
         <button onClick={toggleCam} style={{ marginRight: 8 }}>{camOn ? 'Stäng kamera' : 'Starta kamera'}</button>
         <button onClick={switchCamera}>Byt kamera</button>
       </div>
+      <div style={{ marginTop: 12 }}>
+        <label style={{ fontSize: 14 }}>
+          <input type="checkbox" checked={autoRec} onChange={e => setAutoRec(e.target.checked)} style={{ marginRight: 6 }} />
+          Autoinspelning (rörelse/ljud)
+        </label>
+      </div>
     </div>
   );
+}
+
+// Motion + audio trigger hook
+function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled) {
+  useEffect(() => {
+    if (!enabled) return;
+    let rafId, audioCtx, analyser, dataArray;
+    let lastTrigger = 0;
+    const motionThresh = 20; // avg diff threshold
+    const audioThresh = 0.08; // RMS threshold
+    const cooldownMs = 10000; // 10s between recordings
+
+    const startRecording = () => {
+      if (recordingRef.current) return;
+      const stream = videoRef.current?.srcObject;
+      if (!stream) return;
+      try {
+        // Pick a supported mime type
+        const candidates = [
+          'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp8,opus',
+          'video/webm',
+          'video/mp4' // iOS Safari sometimes supports this for MediaRecorder
+        ];
+        let chosen;
+        for (const m of candidates) {
+          if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) { chosen = m; break; }
+        }
+        const options = chosen ? { mimeType: chosen } : undefined;
+        const rec = new MediaRecorder(stream, options);
+        recRef.current = rec;
+        recChunksRef.current = [];
+        rec.ondataavailable = e => { if (e.data && e.data.size) recChunksRef.current.push(e.data); };
+        rec.onstop = async () => {
+          const outType = chosen && chosen.includes('mp4') ? 'video/mp4' : 'video/webm';
+          const blob = new Blob(recChunksRef.current, { type: outType });
+          recChunksRef.current = [];
+          const ts = Date.now();
+          try {
+            const ext = outType === 'video/mp4' ? 'mp4' : 'webm';
+            await fetch(`/api/upload-clip?room=${encodeURIComponent(roomRef.current)}&ts=${ts}&ext=${ext}`, {
+              method: 'POST',
+              headers: { 'Content-Type': outType },
+              body: blob
+            });
+            setStatus(prev => `Klipp sparat: ${new Date(ts).toLocaleTimeString()}`);
+          } catch (e) {
+            console.error('Upload failed', e);
+            setStatus('Kunde inte ladda upp klipp');
+          }
+          recordingRef.current = false;
+        };
+        rec.start();
+        recordingRef.current = true;
+        setStatus('Inspelning startad…');
+        // Stop after 8 seconds
+        setTimeout(() => { try { rec.stop(); } catch {} }, 8000);
+      } catch (e) {
+        console.error('MediaRecorder error', e);
+      }
+    };
+
+    const tick = () => {
+      const v = videoRef.current;
+      const c = canvasRef.current;
+      if (v && c) {
+        const ctx = c.getContext('2d');
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        const frame = ctx.getImageData(0, 0, c.width, c.height);
+        if (lastFrameRef.current) {
+          // compute average absolute diff
+          let diff = 0;
+          const a = frame.data, b = lastFrameRef.current.data;
+          for (let i = 0; i < a.length; i += 4) {
+            diff += Math.abs(a[i] - b[i]) + Math.abs(a[i+1] - b[i+1]) + Math.abs(a[i+2] - b[i+2]);
+          }
+          diff = diff / (c.width * c.height * 3);
+          const now = Date.now();
+          let rms = 0;
+          if (analyser && dataArray) {
+            analyser.getByteTimeDomainData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+              const val = (dataArray[i] - 128) / 128;
+              sum += val * val;
+            }
+            rms = Math.sqrt(sum / dataArray.length);
+          }
+          const motionHit = diff > motionThresh;
+          const audioHit = rms > audioThresh;
+          if ((motionHit || audioHit) && now - lastTrigger > cooldownMs) {
+            lastTrigger = now;
+            startRecording();
+          }
+        }
+        lastFrameRef.current = frame;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+
+    const setupAudio = () => {
+      try {
+        const stream = videoRef.current?.srcObject;
+        if (!stream) return;
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        dataArray = new Uint8Array(analyser.fftSize);
+        src.connect(analyser);
+      } catch {}
+    };
+
+    setupAudio();
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(rafId);
+      try { audioCtx?.close(); } catch {}
+    };
+  }, [videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled]);
 }
