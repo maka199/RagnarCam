@@ -8,15 +8,24 @@ export default function Viewer({ room }) {
   const pcRef = useRef();
   const [status, setStatus] = useState('Väntar på monitor…');
   const [muted, setMuted] = useState(true);
+  const [wsState, setWsState] = useState('CONNECTING');
+  const [pcState, setPcState] = useState('new');
+  const [iceState, setIceState] = useState('new');
+  const [candidates, setCandidates] = useState(0);
 
   useEffect(() => {
     let ws, pc;
     (async () => {
-      ws = new WebSocket(getWsUrl());
+  ws = new WebSocket(getWsUrl());
       wsRef.current = ws;
+  ws.onopen = () => setWsState('OPEN');
+  ws.onclose = () => setWsState('CLOSED');
+  ws.onerror = () => setWsState('ERROR');
       const iceServers = await fetchIceServers();
-      pc = new RTCPeerConnection({ iceServers });
+  pc = new RTCPeerConnection({ iceServers });
       pcRef.current = pc;
+  pc.onconnectionstatechange = () => setPcState(pc.connectionState);
+  pc.oniceconnectionstatechange = () => setIceState(pc.iceConnectionState);
 
       pc.ontrack = (event) => {
         videoRef.current.srcObject = event.streams[0];
@@ -43,6 +52,7 @@ export default function Viewer({ room }) {
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
+          setCandidates(c => c + 1);
           ws.send(JSON.stringify({ type: 'ice-candidate', room, payload: event.candidate }));
         }
       };
@@ -65,6 +75,9 @@ export default function Viewer({ room }) {
       <h2>Viewer ({room})</h2>
       <video ref={videoRef} autoPlay playsInline muted={muted} style={{ width: '80%', maxWidth: 500 }} />
       <p>{status}</p>
+      <div style={{ fontSize: 12, color: '#555' }}>
+        WS: {wsState} | PC: {pcState} | ICE: {iceState} | ICE candidates: {candidates}
+      </div>
       <div style={{ marginTop: 10 }}>
         <button onClick={() => setMuted(m => !m)}>{muted ? 'Unmute' : 'Mute'}</button>
       </div>

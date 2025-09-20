@@ -122,6 +122,7 @@ app.get('/config', (req, res) => {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const staticDir = path.join(__dirname, '../client-dist');
+app.get('/favicon.ico', (_req, res) => res.sendStatus(204));
 app.use(express.static(staticDir));
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/config') || req.path.startsWith('/healthz')) return next();
