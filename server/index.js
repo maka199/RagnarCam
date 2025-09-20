@@ -102,7 +102,7 @@ app.get('/config', (req, res) => {
   try {
     if (process.env.ICE_SERVERS) {
       const parsed = JSON.parse(process.env.ICE_SERVERS);
-      return res.json({ iceServers: parsed });
+      return res.json({ iceServers: parsed, fixedRoom: FIXED_ROOM || null });
     }
   } catch (e) {}
 
@@ -115,7 +115,7 @@ app.get('/config', (req, res) => {
   }
   // Always include a public STUN as fallback
   iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
-  res.json({ iceServers });
+  res.json({ iceServers, fixedRoom: FIXED_ROOM || null });
 });
 
 // Optional: serve static client if built (for Render single-service deploy)

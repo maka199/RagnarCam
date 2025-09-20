@@ -35,3 +35,10 @@ export async function fetchIceServers() {
     { urls: 'stun:stun.l.google.com:19302' }
   ];
 }
+
+export async function fetchServerConfig() {
+  const origin = getSignalingOrigin();
+  const res = await fetch(`${origin}/config`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
