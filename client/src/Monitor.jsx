@@ -22,13 +22,16 @@ export default function Monitor({ room }) {
     audioThresh: 0.08,    // RMS
     calmMs: 2000,         // stop N ms efter att aktivitet upphört
     maxMs: 60000,         // max klipplängd (1 min)
-    cooldownMs: 10000     // min tid mellan klipp
+    cooldownMs: 10000,    // min tid mellan klipp
+    extendOnActivity: false, // förläng klipp så länge aktivitet pågår
+    preferMp4: true        // försök spela in som MP4 när möjligt (för iOS-kompatibilitet)
   });
   const canvasRef = useRef();
   const lastFrameRef = useRef(null);
   const recRef = useRef(null);
   const recChunksRef = useRef([]);
   const recordingRef = useRef(false);
+  const stopTimerRef = useRef(null);
   const roomRef = useRef(room);
   useEffect(() => { roomRef.current = room; }, [room]);
 
@@ -208,11 +211,6 @@ export default function Monitor({ room }) {
                   onChange={e => setSettings(s => ({ ...s, audioThresh: Number(e.target.value) }))}
                   style={{ width: '100%' }} />
               </label>
-              <label>Calm timeout (ms)
-                <input type="number" min={500} max={10000} step={100} value={settings.calmMs}
-                  onChange={e => setSettings(s => ({ ...s, calmMs: Number(e.target.value) }))}
-                  style={{ width: '100%' }} />
-              </label>
               <label>Maxlängd (sek)
                 <input type="number" min={10} max={120} step={5} value={Math.round(settings.maxMs/1000)}
                   onChange={e => setSettings(s => ({ ...s, maxMs: Number(e.target.value) * 1000 }))}
@@ -222,6 +220,24 @@ export default function Monitor({ room }) {
                 <input type="number" min={5} max={60} step={1} value={Math.round(settings.cooldownMs/1000)}
                   onChange={e => setSettings(s => ({ ...s, cooldownMs: Number(e.target.value) * 1000 }))}
                   style={{ width: '100%' }} />
+              </label>
+              <label style={{ gridColumn: '1 / span 2' }}>
+                <input type="checkbox" checked={settings.extendOnActivity}
+                  onChange={e => setSettings(s => ({ ...s, extendOnActivity: e.target.checked }))}
+                  style={{ marginRight: 6 }} />
+                Förläng medan det är aktivitet
+              </label>
+              <label style={{ gridColumn: '1 / span 2' }}>
+                <input type="checkbox" checked={settings.preferMp4}
+                  onChange={e => setSettings(s => ({ ...s, preferMp4: e.target.checked }))}
+                  style={{ marginRight: 6 }} />
+                Föredra MP4 (när möjligt)
+              </label>
+              <label style={{ opacity: settings.extendOnActivity ? 1 : 0.5 }}>
+                Calm timeout (ms)
+                <input type="number" min={500} max={10000} step={100} value={settings.calmMs}
+                  onChange={e => setSettings(s => ({ ...s, calmMs: Number(e.target.value) }))}
+                  style={{ width: '100%' }} disabled={!settings.extendOnActivity} />
               </label>
             </div>
           </details>
@@ -237,7 +253,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
     if (!enabled) return;
     let rafId, audioCtx, analyser, dataArray;
     let lastTrigger = 0;
-    const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs } = settings || {};
+  const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs, extendOnActivity, preferMp4 } = settings || {};
     const recStartTsRef = { current: 0 };
     const lastActiveTsRef = { current: 0 };
 
@@ -246,13 +262,20 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
       const stream = videoRef.current?.srcObject;
       if (!stream) return;
       try {
-        // Pick a supported mime type
-        const candidates = [
-          'video/webm;codecs=vp9,opus',
-          'video/webm;codecs=vp8,opus',
-          'video/webm',
-          'video/mp4' // iOS Safari sometimes supports this for MediaRecorder
-        ];
+        // Pick a supported mime type (prefer MP4 when requested)
+        const candidates = preferMp4
+          ? [
+              'video/mp4',
+              'video/webm;codecs=vp9,opus',
+              'video/webm;codecs=vp8,opus',
+              'video/webm'
+            ]
+          : [
+              'video/webm;codecs=vp9,opus',
+              'video/webm;codecs=vp8,opus',
+              'video/webm',
+              'video/mp4'
+            ];
         let chosen;
         for (const m of candidates) {
           if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) { chosen = m; break; }
@@ -263,6 +286,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         recChunksRef.current = [];
         rec.ondataavailable = e => { if (e.data && e.data.size) recChunksRef.current.push(e.data); };
         rec.onstop = async () => {
+          if (stopTimerRef.current) { clearTimeout(stopTimerRef.current); stopTimerRef.current = null; }
           const outType = chosen && chosen.includes('mp4') ? 'video/mp4' : 'video/webm';
           const blob = new Blob(recChunksRef.current, { type: outType });
           recChunksRef.current = [];
@@ -287,6 +311,9 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         recStartTsRef.current = Date.now();
         lastActiveTsRef.current = recStartTsRef.current;
         setStatus('Inspelning startad…');
+        // Explicit stop at max length to guarantee fixed length when extendOnActivity=false
+        const maxMsEff = (maxMs || 60000);
+        stopTimerRef.current = setTimeout(() => { try { rec.stop(); } catch {} }, maxMsEff + 50);
       } catch (e) {
         console.error('MediaRecorder error', e);
       }
@@ -322,11 +349,18 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
           const audioHit = rms > audioThresh;
           const activeHit = motionHit || audioHit;
           if (recordingRef.current) {
-            if (activeHit) lastActiveTsRef.current = now;
+            // Always stop at max length
             const recTooLong = now - recStartTsRef.current > (maxMs || 60000);
-            const calmEnough = now - lastActiveTsRef.current > (calmMs || 2000);
-            if (recTooLong || calmEnough) {
-              try { recRef.current?.stop(); } catch {}
+            if (extendOnActivity) {
+              if (activeHit) lastActiveTsRef.current = now;
+              const calmEnough = now - lastActiveTsRef.current > (calmMs || 2000);
+              if (recTooLong || calmEnough) {
+                try { recRef.current?.stop(); } catch {}
+              }
+            } else {
+              if (recTooLong) {
+                try { recRef.current?.stop(); } catch {}
+              }
             }
           } else {
             if (activeHit && now - lastTrigger > (cooldownMs || 10000)) {

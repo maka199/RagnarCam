@@ -216,6 +216,7 @@ export default function Viewer({ room }) {
                 <a href={c.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 220 }}>
                   {new Date(c.ts || Date.now()).toLocaleString()} – {c.file}
                 </a>
+                <span style={{ fontSize: 12, color: '#666' }}>{c.file.toLowerCase().endsWith('.mp4') ? 'MP4' : c.file.toLowerCase().endsWith('.webm') ? 'WEBM' : ''}</span>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button onClick={() => setSelectedClip(c)}>Spela här</button>
                   <button onClick={() => downloadClip(c)}>Ladda ner</button>
@@ -232,6 +233,11 @@ export default function Viewer({ room }) {
               <button onClick={() => setSelectedClip(null)}>Stäng</button>
             </div>
             <video src={selectedClip.url} style={{ width: '100%', maxWidth: 600 }} controls playsInline />
+          </div>
+        )}
+        {selectedClip && selectedClip.file.toLowerCase().endsWith('.webm') && (
+          <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+            iOS kan ha svårt att spela WEBM efter nedladdning. Spela gärna här i appen, öppna i Safari, eller dela till VLC/Infuse.
           </div>
         )}
       </div>

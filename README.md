@@ -86,8 +86,9 @@ Alternativ B: Två tjänster (en för klient, en för signalering), sätt `VITE_
 Monitor-sidan har en checkbox “Autoinspelning (rörelse/ljud)”. När den är på:
 - En enkel rörelsedetektering körs via canvas-frame-diff på en nedskalad bild.
 - Ljudnivå mäts via Web Audio (RMS). Om rörelse eller ljud överstiger tröskelvärden startas en inspelning.
-- Inspelningen använder ett “rullande stopp”: den fortsätter så länge aktivitet pågår, och stoppas när det har varit lugnt i X ms (calm timeout). Dessutom finns en maxlängd.
-- Standardinställningar: calm timeout 2000 ms, maxlängd 60 s, cooldown 10 s.
+- Standard: fasta klipp på 60 sekunder.
+- Valbart: kryssa i “Förläng medan det är aktivitet” för rullande stopp — klippet fortsätter då medan det är aktivitet och stoppas när det varit lugnt i X ms (calm timeout), dock aldrig längre än maxlängd.
+- Standardinställningar: maxlängd 60 s, cooldown 10 s (calm timeout används bara om “Förläng…” är på).
 - Alla trösklar och tider kan justeras i UI:t under “Inspelningsinställningar”.
 
 Klipp lagras på serverns filsystem under `server/clips/<room>/` och exponeras som URLs under `/clips/<room>/<fil>`. Viewer-sidan har en “Klipp”-sektion som listar och spelar upp klipp. API:n är:
@@ -105,3 +106,7 @@ Framtida förbättring: Det går att bygga ut servern för flera monitorer i sam
 - I Viewer finns knappar för “Ladda ner” (hämtar filen lokalt) och “Dela” (via Web Share API om enheten stöder det). På iOS/Android öppnas då systemets delningsdialog.
 - Om “Dela” inte stöds kan du alltid klicka fil-länken och använda webbläsarens egna “Spara”/“Ladda ned”.
 - Filformat kan vara `.webm` eller `.mp4` beroende på vilken plattform som spelat in. De flesta moderna webbläsare spelar åtminstone `.mp4`, medan `.webm` fungerar utmärkt på Android/Chrome och moderna desktop-browser.
+ - Filformat kan vara `.webm` eller `.mp4` beroende på vilken plattform som spelat in. De flesta moderna webbläsare spelar åtminstone `.mp4`, medan `.webm` fungerar utmärkt på Android/Chrome och moderna desktop-browser. iOS kan ha begränsat stöd för `.webm` efter nedladdning—spela då klippet i appen, öppna i Safari eller dela till VLC/Infuse.
+
+### Inspelningsformat
+- Monitorn försöker spela in i MP4 när möjligt (ny inställning “Föredra MP4”). När MP4 inte stöds faller den tillbaka till WEBM.
