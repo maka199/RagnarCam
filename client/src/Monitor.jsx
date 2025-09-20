@@ -199,28 +199,39 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
       if (!stream) return;
       try {
         // Pick a supported mime type
+        // WebM-only (no MP4)
         const candidates = [
           'video/webm;codecs=vp9,opus',
           'video/webm;codecs=vp8,opus',
-          'video/webm',
-          'video/mp4' // iOS Safari sometimes supports this for MediaRecorder
+          'video/webm'
         ];
         let chosen;
         for (const m of candidates) {
           if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) { chosen = m; break; }
         }
-        const options = chosen ? { mimeType: chosen } : undefined;
-        const rec = new MediaRecorder(stream, options);
+        let rec;
+        try {
+          const options = chosen ? { mimeType: chosen } : undefined;
+          rec = new MediaRecorder(stream, options);
+        } catch (e) {
+          // As a last resort, try without options
+          rec = new MediaRecorder(stream);
+        }
         recRef.current = rec;
         recChunksRef.current = [];
         rec.ondataavailable = e => { if (e.data && e.data.size) recChunksRef.current.push(e.data); };
+        rec.onerror = (ev) => {
+          const err = ev?.error;
+          console.error('MediaRecorder onerror', err);
+          setStatus(`Inspelningsfel: ${err?.name || ''} ${err?.message || ''}`.trim());
+        };
         rec.onstop = async () => {
-          const outType = chosen && chosen.includes('mp4') ? 'video/mp4' : 'video/webm';
+          const outType = 'video/webm';
           const blob = new Blob(recChunksRef.current, { type: outType });
           recChunksRef.current = [];
           const ts = Date.now();
           try {
-            const ext = outType === 'video/mp4' ? 'mp4' : 'webm';
+            const ext = 'webm';
             await fetch(`/api/upload-clip?room=${encodeURIComponent(roomRef.current)}&ts=${ts}&ext=${ext}`, {
               method: 'POST',
               headers: { 'Content-Type': outType },
@@ -240,9 +251,9 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         rec.start();
         recordingRef.current = true;
         arming = false;
-  setStatus('Inspelning startad…');
-        // Stop after 30 seconds
-        setTimeout(() => { try { rec.stop(); } catch {} }, 30000);
+        setStatus(`Inspelning startad${chosen ? ` (${chosen})` : ''}…`);
+        // Stop after 10 seconds for quicker testing
+        setTimeout(() => { try { rec.stop(); } catch {} }, 10000);
       } catch (e) {
         console.error('MediaRecorder error', e);
         setStatus(`Kunde inte starta inspelning: ${e?.name || 'Error'} ${e?.message || ''}`.trim());
