@@ -26,7 +26,9 @@ export default function Monitor({ room }) {
     extendOnActivity: false, // förläng klipp så länge aktivitet pågår
     burstFallback: true,   // vid total inspelnings-fail: spara stillbilder
     burstFps: 2,           // bilder per sekund
-    burstScale: 0.5        // skala av video till canvas för burst
+    burstScale: 0.5,        // skala av video till canvas för burst
+    legacyRecorder: false,  // Kör enkel "new MediaRecorder(stream)" utan mime och utan timeslice
+    recordVideoOnly: false  // Spela in endast video (kan hjälpa vissa devices)
   });
   const canvasRef = useRef();
   const lastFrameRef = useRef(null);
@@ -257,6 +259,18 @@ export default function Monitor({ room }) {
                   onChange={e => setSettings(s => ({ ...s, calmMs: Number(e.target.value) }))}
                   style={{ width: '100%' }} disabled={!settings.extendOnActivity} />
               </label>
+              <label style={{ gridColumn: '1 / span 2' }}>
+                <input type="checkbox" checked={settings.legacyRecorder}
+                  onChange={e => setSettings(s => ({ ...s, legacyRecorder: e.target.checked }))}
+                  style={{ marginRight: 6 }} />
+                Legacy-läge: enkel inspelning (kan hjälpa äldre/struliga enheter)
+              </label>
+              <label style={{ gridColumn: '1 / span 2' }}>
+                <input type="checkbox" checked={settings.recordVideoOnly}
+                  onChange={e => setSettings(s => ({ ...s, recordVideoOnly: e.target.checked }))}
+                  style={{ marginRight: 6 }} />
+                Spela in endast video (kan underlätta om ljud triggar fel)
+              </label>
             </div>
           </details>
         </div>
@@ -271,7 +285,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
     if (!enabled) return;
     let rafId, audioCtx, analyser, dataArray;
     let lastTrigger = 0;
-  const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs, extendOnActivity, burstFallback, burstFps, burstScale } = settings || {};
+  const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs, extendOnActivity, burstFallback, burstFps, burstScale, legacyRecorder, recordVideoOnly } = settings || {};
     const recStartTsRef = { current: 0 };
     const lastActiveTsRef = { current: 0 };
 
@@ -279,6 +293,12 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
       if (recordingRef.current) return;
       let stream = videoRef.current?.srcObject;
       if (!stream) return;
+      if (recordVideoOnly && stream) {
+        try {
+          const vtrack = stream.getVideoTracks()[0];
+          if (vtrack) stream = new MediaStream([vtrack]);
+        } catch {}
+      }
       // Notify viewer to start local recording as a fallback and apply cooldown immediately
       try {
         const ts = Date.now();
@@ -314,6 +334,39 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         }
       };
 
+      if (legacyRecorder) {
+        try {
+          const rec = new MediaRecorder(stream);
+          recRef.current = rec;
+          recChunksRef.current = [];
+          rec.ondataavailable = e => { if (e.data && e.data.size) recChunksRef.current.push(e.data); };
+          rec.onstop = async () => {
+            if (stopTimerRef.current) { clearTimeout(stopTimerRef.current); stopTimerRef.current = null; }
+            const blob = new Blob(recChunksRef.current, { type: 'video/webm' });
+            recChunksRef.current = [];
+            const ts = Date.now();
+            try {
+              await fetch(`/api/upload-clip?room=${encodeURIComponent(roomRef.current)}&ts=${ts}&ext=webm`, {
+                method: 'POST', headers: { 'Content-Type': 'video/webm' }, body: blob
+              });
+              setStatus(prev => `Klipp sparat: ${new Date(ts).toLocaleTimeString()}`);
+            } catch { setStatus('Kunde inte ladda upp klipp'); }
+            recordingRef.current = false;
+            lastTrigger = Date.now();
+          };
+          recordingRef.current = true;
+          recStartTsRef.current = Date.now();
+          lastActiveTsRef.current = recStartTsRef.current;
+          setStatus('Legacy-inspelning startad…');
+          rec.start(); // utan timeslice
+          const maxMsEff = (maxMs || 60000);
+          stopTimerRef.current = setTimeout(() => { try { recRef.current?.stop(); } catch {} }, maxMsEff + 50);
+          return; // hoppa över resten
+        } catch (e) {
+          // fall back to normal path
+        }
+      }
+
       const webmCandidates = [
         'video/webm;codecs=vp9,opus',
         'video/webm;codecs=vp8,opus',
@@ -327,7 +380,8 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
           const v = videoRef.current;
           if (c && v) {
             const canvasStream = c.captureStream(15);
-            const audioTracks = (stream.getAudioTracks && stream.getAudioTracks()) ? stream.getAudioTracks() : [];
+            let audioTracks = (stream.getAudioTracks && stream.getAudioTracks()) ? stream.getAudioTracks() : [];
+            if (recordVideoOnly) audioTracks = []; // video-only om valt
             const composed = new MediaStream([ ...canvasStream.getVideoTracks(), ...audioTracks ]);
             // Try again on composed stream with WebM only
             let composedPicked = await tryStart(webmCandidates);
