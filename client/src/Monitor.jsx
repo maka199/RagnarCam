@@ -45,11 +45,15 @@ export default function Monitor({ room }) {
       }
 
       try {
-    ws = new WebSocket(getWsUrl());
-    wsRef.current = ws;
-    ws.addEventListener('open', () => { setWsState('OPEN'); setStatus('Ansluter till signalserver…'); });
-    ws.addEventListener('close', () => { setWsState('CLOSED'); setStatus('WS stängd'); });
-    ws.addEventListener('error', () => { setWsState('ERROR'); setStatus('WS-fel'); });
+        ws = new WebSocket(getWsUrl());
+        wsRef.current = ws;
+        // Join as monitor as soon as WS opens (attach early to avoid race)
+        ws.addEventListener('open', () => {
+          setWsState('OPEN');
+          try { ws.send(JSON.stringify({ type: 'join', role: 'monitor', room })); } catch {}
+        });
+        ws.addEventListener('close', () => { setWsState('CLOSED'); setStatus('WS stängd'); });
+        ws.addEventListener('error', () => { setWsState('ERROR'); setStatus('WS-fel'); });
 
         const iceServers = await fetchIceServers();
         pc = new RTCPeerConnection({ iceServers });
@@ -58,10 +62,10 @@ export default function Monitor({ room }) {
   pc.oniceconnectionstatechange = () => setIceState(pc.iceConnectionState);
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-        ws.addEventListener('open', () => {
-          // Join as monitor
+        // If WS is already open (fast connect), ensure join is sent
+        if (ws.readyState === WebSocket.OPEN) {
           try { ws.send(JSON.stringify({ type: 'join', role: 'monitor', room })); } catch {}
-        });
+        }
 
         ws.onmessage = async (event) => {
           const msg = JSON.parse(event.data);

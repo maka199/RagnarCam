@@ -20,11 +20,12 @@ export default function Viewer({ room }) {
   useEffect(() => {
     let ws, pc;
     (async () => {
-    ws = new WebSocket(getWsUrl());
-    wsRef.current = ws;
-    ws.addEventListener('open', () => setWsState('OPEN'));
-    ws.addEventListener('close', () => setWsState('CLOSED'));
-    ws.addEventListener('error', () => setWsState('ERROR'));
+  ws = new WebSocket(getWsUrl());
+  wsRef.current = ws;
+  // Join as viewer as soon as WS opens (attach early to avoid race)
+  ws.addEventListener('open', () => { setWsState('OPEN'); try { ws.send(JSON.stringify({ type: 'join', role: 'viewer', room })); } catch {} });
+  ws.addEventListener('close', () => setWsState('CLOSED'));
+  ws.addEventListener('error', () => setWsState('ERROR'));
       const iceServers = await fetchIceServers();
   pc = new RTCPeerConnection({ iceServers });
       pcRef.current = pc;
@@ -63,10 +64,10 @@ export default function Viewer({ room }) {
         }
       };
 
-      ws.addEventListener('open', () => {
-        // Join as viewer
+      // If WS is already open (fast connect), ensure join is sent
+      if (ws.readyState === WebSocket.OPEN) {
         try { ws.send(JSON.stringify({ type: 'join', role: 'viewer', room })); } catch {}
-      });
+      }
     })();
 
     return () => {
