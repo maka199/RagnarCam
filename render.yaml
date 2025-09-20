@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ragnarcam
+    env: node
+    rootDir: server
+    plan: free
+    autoDeploy: true
+    buildCommand: npm install && npm run build:client
+    startCommand: node index.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 20

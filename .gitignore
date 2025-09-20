@@ -1,0 +1,19 @@
+node_modules
+npm-debug.log*
+pnpm-lock.yaml
+package-lock.json
+dist
+
+# client build
+client/dist
+
+# server copied client build
+server/client-dist
+
+# local env files
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+.vscode
