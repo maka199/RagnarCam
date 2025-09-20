@@ -18,6 +18,9 @@ export default function Viewer({ room }) {
   const [sharingSupport, setSharingSupport] = useState({ url: false, files: false });
   const [talkbackOn, setTalkbackOn] = useState(false);
   const micStreamRef = useRef(null);
+  const [localRecOn, setLocalRecOn] = useState(false);
+  const localRecRef = useRef(null);
+  const localRecChunksRef = useRef([]);
 
   useEffect(() => {
     let ws, pc;
@@ -55,6 +58,13 @@ export default function Viewer({ room }) {
           } catch (e) {}
         } else if (msg.type === 'monitor-left') {
           setStatus('Monitor lämnade – väntar på ny monitor…');
+        } else if (msg.type === 'record-trigger') {
+          // Optional: start local recording on the viewer side as a fallback
+          if (localRecOn) {
+            try {
+              await startLocalRecording();
+            } catch {}
+          }
         }
       };
 
@@ -165,6 +175,44 @@ export default function Viewer({ room }) {
     }
   };
 
+  const startLocalRecording = async () => {
+    const v = videoRef.current;
+    if (!v || !v.srcObject) return;
+    try {
+      const stream = v.srcObject;
+      const candidates = [ 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm' ];
+      let chosen;
+      let rec;
+      for (const m of candidates) {
+        try {
+          if (MediaRecorder.isTypeSupported && !MediaRecorder.isTypeSupported(m)) continue;
+          rec = new MediaRecorder(stream, { mimeType: m });
+          chosen = m;
+          break;
+        } catch {}
+      }
+      if (!rec) rec = new MediaRecorder(stream);
+      localRecRef.current = rec;
+      localRecChunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) localRecChunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        const outType = chosen && chosen.includes('webm') ? 'video/webm' : 'application/octet-stream';
+        const blob = new Blob(localRecChunksRef.current, { type: outType });
+        localRecChunksRef.current = [];
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `viewer_${Date.now()}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      };
+      rec.start();
+      setTimeout(() => { try { localRecRef.current?.stop(); } catch {} }, 60000);
+    } catch {}
+  };
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -195,6 +243,10 @@ export default function Viewer({ room }) {
           try { await videoRef.current.play(); } catch {}
         }}>{muted ? 'Unmute' : 'Mute'}</button>
         <button onClick={toggleTalkback} style={{ marginLeft: 8 }}>{talkbackOn ? 'Stäng mic (till monitor)' : 'Starta mic (till monitor)'}</button>
+        <label style={{ marginLeft: 12, fontSize: 12 }}>
+          <input type="checkbox" checked={localRecOn} onChange={e => setLocalRecOn(e.target.checked)} style={{ marginRight: 6 }} />
+          Spela in lokalt vid trigger (fallback)
+        </label>
       </div>
       <div style={{ fontSize: 12, color: '#555' }}>Remote audio tracks: {audioInfo.count}</div>
       <div style={{ marginTop: 24, textAlign: 'left', maxWidth: 600, marginInline: 'auto' }}>

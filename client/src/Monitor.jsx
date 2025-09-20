@@ -176,7 +176,7 @@ export default function Monitor({ room }) {
   };
 
   // Start motion/sound triggers when enabled
-  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, autoRec, settings);
+  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, wsRef, autoRec, settings);
 
   return (
     <div style={{ textAlign: 'center', marginTop: 40 }}>
@@ -251,7 +251,7 @@ export default function Monitor({ room }) {
 }
 
 // Motion + audio trigger hook
-function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled, settings) {
+function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, wsRef, enabled, settings) {
   useEffect(() => {
     if (!enabled) return;
     let rafId, audioCtx, analyser, dataArray;
@@ -262,7 +262,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
 
     const startRecording = async () => {
       if (recordingRef.current) return;
-      const stream = videoRef.current?.srcObject;
+      let stream = videoRef.current?.srcObject;
       if (!stream) return;
       // helper to try types in order
       const tryStart = async (types) => {
@@ -288,12 +288,25 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         }
       };
 
-      const mp4First = [ null, 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm' ];
-      const webmFirst = [ null, 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4' ];
-      let picked = await tryStart(preferMp4 ? mp4First : webmFirst);
-      if (!picked && preferMp4) {
-        // fallback from mp4-first to webm-first
-        picked = await tryStart(webmFirst);
+      const mp4Candidates = [
+        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+        'video/mp4;codecs=avc1.4D401E,mp4a.40.2',
+        'video/mp4;codecs=avc1.64001E,mp4a.40.2',
+        'video/mp4;codecs=avc1.42E01E',
+        'video/mp4;codecs=avc1.4D401E',
+        'video/mp4;codecs=avc1.64001E',
+        // Some browsers only accept generic mp4 without explicit codecs
+        'video/mp4'
+      ];
+      const webmCandidates = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm'
+      ];
+      let picked = await tryStart(preferMp4 ? mp4Candidates : webmCandidates);
+      if (!picked) {
+        // try the other family
+        picked = await tryStart(preferMp4 ? webmCandidates : mp4Candidates);
       }
       if (!picked) {
         // Fallback: prova spela in en komponerad ström (canvas video + original audio)
@@ -304,7 +317,11 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
             const canvasStream = c.captureStream(15);
             const audioTracks = (stream.getAudioTracks && stream.getAudioTracks()) ? stream.getAudioTracks() : [];
             const composed = new MediaStream([ ...canvasStream.getVideoTracks(), ...audioTracks ]);
-            const composedPicked = await tryStart(webmFirst);
+            // Try again on composed stream, first with preferred family
+            let composedPicked = await tryStart(preferMp4 ? mp4Candidates : webmCandidates);
+            if (!composedPicked) {
+              composedPicked = await tryStart(preferMp4 ? webmCandidates : mp4Candidates);
+            }
             if (composedPicked) {
               // Switch to composed stream for recording
               stream = composed;
@@ -368,6 +385,13 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         lastActiveTsRef.current = recStartTsRef.current;
   const label = recRef.current.mimeType || chosen || 'okänd';
   setStatus(`Inspelning startad (${label})…`);
+        // Signal viewer to optionally start local recording as fallback
+        try {
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'record-trigger', room: roomRef.current, payload: { ts: recStartTsRef.current } }));
+          }
+        } catch {}
         const maxMsEff = (maxMs || 60000);
         stopTimerRef.current = setTimeout(() => { try { recRef.current?.stop(); } catch {} }, maxMsEff + 50);
       } catch (e) {
