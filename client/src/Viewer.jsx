@@ -15,6 +15,9 @@ export default function Viewer({ room }) {
   const [audioInfo, setAudioInfo] = useState({ count: 0 });
   const [clips, setClips] = useState([]);
   const [selectedClip, setSelectedClip] = useState(null);
+  const [selectedBurst, setSelectedBurst] = useState(null);
+  const burstImgRef = useRef(null);
+  const [burstState, setBurstState] = useState({ playing: false, frame: 0, fps: 2, frames: [] });
   const [sharingSupport, setSharingSupport] = useState({ url: false, files: false });
   const [talkbackOn, setTalkbackOn] = useState(false);
   const micStreamRef = useRef(null);
@@ -229,6 +232,29 @@ export default function Viewer({ room }) {
     return () => { cancelled = true; clearInterval(id); };
   }, [room]);
 
+  useEffect(() => {
+    let timer;
+    const updateImg = () => {
+      if (!selectedBurst || !burstImgRef.current) return;
+      const frameFile = burstState.frames[burstState.frame];
+      if (frameFile) {
+        const url = `${selectedBurst.base}${encodeURIComponent(frameFile)}`;
+        burstImgRef.current.src = url;
+      }
+    };
+    updateImg();
+    if (burstState.playing) {
+      const interval = Math.max(100, Math.floor(1000 / (burstState.fps || 2)));
+      timer = setInterval(() => {
+        setBurstState(s => {
+          const next = (s.frame + 1) % (s.frames.length || 1);
+          return { ...s, frame: next };
+        });
+      }, interval);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [burstState.playing, burstState.frame, burstState.fps, selectedBurst]);
+
   return (
     <div style={{ textAlign: 'center', marginTop: 40 }}>
       <h2>Viewer ({room})</h2>
@@ -265,15 +291,35 @@ export default function Viewer({ room }) {
           <ul style={{ listStyle: 'none', padding: 0 }}>
             {clips.map((c) => (
               <li key={c.file} style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <a href={c.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 220 }}>
-                  {new Date(c.ts || Date.now()).toLocaleString()} – {c.file}
-                </a>
-                <span style={{ fontSize: 12, color: '#666' }}>{c.file.toLowerCase().endsWith('.mp4') ? 'MP4' : c.file.toLowerCase().endsWith('.webm') ? 'WEBM' : ''}</span>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={() => setSelectedClip(c)}>Spela här</button>
-                  <button onClick={() => downloadClip(c)}>Ladda ner</button>
-                  <button onClick={() => shareClip(c)} disabled={!sharingSupport.url}>Dela</button>
-                </div>
+                {c.type === 'burst' ? (
+                  <>
+                    <span style={{ flex: 1, minWidth: 220 }}>
+                      {new Date(c.ts || Date.now()).toLocaleString()} – {c.file} (BURST)
+                    </span>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={async () => {
+                        try {
+                          const res = await fetch(c.url);
+                          const manifest = await res.json();
+                          setSelectedBurst({ base: c.url.replace(/manifest\.json$/, ''), manifest });
+                          setBurstState({ playing: false, frame: 0, fps: manifest.fps || 2, frames: manifest.frames || [] });
+                        } catch {}
+                      }}>Öppna burst</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <a href={c.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 220 }}>
+                      {new Date(c.ts || Date.now()).toLocaleString()} – {c.file}
+                    </a>
+                    <span style={{ fontSize: 12, color: '#666' }}>{c.file.toLowerCase().endsWith('.webm') ? 'WEBM' : ''}</span>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => setSelectedClip(c)}>Spela här</button>
+                      <button onClick={() => downloadClip(c)}>Ladda ner</button>
+                      <button onClick={() => shareClip(c)} disabled={!sharingSupport.url}>Dela</button>
+                    </div>
+                  </>
+                )}
               </li>
             ))}
           </ul>
@@ -285,6 +331,23 @@ export default function Viewer({ room }) {
               <button onClick={() => setSelectedClip(null)}>Stäng</button>
             </div>
             <video src={selectedClip.url} style={{ width: '100%', maxWidth: 600 }} controls playsInline />
+          </div>
+        )}
+        {selectedBurst && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong>Visar burst</strong>
+              <button onClick={() => { setSelectedBurst(null); setBurstState({ playing: false, frame: 0, fps: 2, frames: [] }); }}>Stäng</button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <img ref={burstImgRef} alt="burst" style={{ width: '100%', maxWidth: 600, background: '#000' }} />
+              <div style={{ whiteSpace: 'nowrap' }}>
+                <button onClick={() => setBurstState(s => ({ ...s, frame: Math.max(0, s.frame - 1) }))}>{'<'}</button>
+                <button onClick={() => setBurstState(s => ({ ...s, playing: !s.playing }))} style={{ marginInline: 6 }}>{burstState.playing ? 'Pausa' : 'Spela'}</button>
+                <button onClick={() => setBurstState(s => ({ ...s, frame: Math.min((s.frames.length - 1) || 0, s.frame + 1) }))}>{'>'}</button>
+                <span style={{ marginLeft: 8, fontSize: 12 }}>{burstState.frame + 1}/{burstState.frames.length}</span>
+              </div>
+            </div>
           </div>
         )}
         {selectedClip && selectedClip.file.toLowerCase().endsWith('.webm') && (

@@ -9,6 +9,7 @@ import fsp from 'fs/promises';
 
 const app = express();
 app.use(cors());
+app.use(express.json({ limit: '2mb' }));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const FIXED_ROOM = process.env.ROOM_ID || process.env.ROOM || null;
@@ -140,15 +141,37 @@ app.get('/api/clips/:room', async (req, res) => {
   if (!room) return res.json([]);
   try {
     const dir = path.join(clipsRoot, room);
-    const files = await fsp.readdir(dir).catch(() => []);
-    const items = files
-      .filter(f => f.endsWith('.webm') || f.endsWith('.mp4'))
-      .map(f => ({
-        file: f,
-        url: `/clips/${encodeURIComponent(room)}/${encodeURIComponent(f)}`,
-        ts: Number(f.split('_')[0]) || null
-      }))
-      .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const items = [];
+    for (const ent of entries) {
+      if (ent.isFile()) {
+        const f = ent.name;
+        if (f.endsWith('.webm') || f.endsWith('.mp4')) {
+          items.push({
+            type: 'video',
+            file: f,
+            url: `/clips/${encodeURIComponent(room)}/${encodeURIComponent(f)}`,
+            ts: Number(f.split('_')[0]) || null
+          });
+        }
+      } else if (ent.isDirectory()) {
+        const name = ent.name;
+        // Burst directories expected as <ts>_burst with manifest.json inside
+        if (name.endsWith('_burst')) {
+          const manPath = path.join(dir, name, 'manifest.json');
+          const exists = await fsp.access(manPath).then(() => true).catch(() => false);
+          if (exists) {
+            items.push({
+              type: 'burst',
+              file: name,
+              url: `/clips/${encodeURIComponent(room)}/${encodeURIComponent(name)}/manifest.json`,
+              ts: Number(name.split('_')[0]) || null
+            });
+          }
+        }
+      }
+    }
+    items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     res.json(items);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -170,6 +193,55 @@ app.post('/api/upload-clip', express.raw({ type: '*/*', limit: process.env.MAX_C
     if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty body' });
     await fsp.writeFile(filepath, req.body);
     res.json({ ok: true, url: `/clips/${encodeURIComponent(room)}/${encodeURIComponent(filename)}` });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Upload a single JPEG frame for a burst clip
+// POST /api/upload-burst-frame?room=XYZ&clip=1690000000000_burst&seq=12
+// Body: image/jpeg
+app.post('/api/upload-burst-frame', express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '5mb' }), async (req, res) => {
+  try {
+    const room = (req.query.room || FIXED_ROOM || '').toString().trim();
+    const clip = (req.query.clip || '').toString().trim();
+    const seq = Number(req.query.seq);
+    if (!room || !clip || !(seq >= 0)) return res.status(400).json({ error: 'room, clip, seq required' });
+    const dir = path.join(clipsRoot, room, clip);
+    await fsp.mkdir(dir, { recursive: true });
+    const filename = `${String(seq).padStart(5, '0')}.jpg`;
+    const filepath = path.join(dir, filename);
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty body' });
+    await fsp.writeFile(filepath, req.body);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Finalize a burst clip: writes manifest.json with frames list and fps
+// POST /api/finalize-burst  JSON: { room, clip, ts, fps, frames }
+app.post('/api/finalize-burst', async (req, res) => {
+  try {
+    const { room: roomBody, clip, ts, fps, frames } = req.body || {};
+    const room = (roomBody || FIXED_ROOM || '').toString().trim();
+    if (!room || !clip) return res.status(400).json({ error: 'room, clip required' });
+    const dir = path.join(clipsRoot, room, clip);
+    const exists = await fsp.access(dir).then(() => true).catch(() => false);
+    if (!exists) return res.status(400).json({ error: 'clip directory missing' });
+    const frameFiles = [];
+    const count = Number(frames) || 0;
+    for (let i = 0; i < count; i++) {
+      frameFiles.push(`${String(i).padStart(5, '0')}.jpg`);
+    }
+    const manifest = {
+      type: 'burst',
+      ts: Number(ts) || Date.now(),
+      fps: Number(fps) || 2,
+      frames: frameFiles
+    };
+    await fsp.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+    res.json({ ok: true, url: `/clips/${encodeURIComponent(room)}/${encodeURIComponent(clip)}/manifest.json` });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

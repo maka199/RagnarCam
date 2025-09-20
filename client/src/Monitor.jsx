@@ -23,7 +23,10 @@ export default function Monitor({ room }) {
     calmMs: 2000,         // stop N ms efter att aktivitet upphört
     maxMs: 60000,         // max klipplängd (1 min)
     cooldownMs: 10000,    // min tid mellan klipp
-    extendOnActivity: false // förläng klipp så länge aktivitet pågår
+    extendOnActivity: false, // förläng klipp så länge aktivitet pågår
+    burstFallback: true,   // vid total inspelnings-fail: spara stillbilder
+    burstFps: 2,           // bilder per sekund
+    burstScale: 0.5        // skala av video till canvas för burst
   });
   const canvasRef = useRef();
   const lastFrameRef = useRef(null);
@@ -230,6 +233,24 @@ export default function Monitor({ room }) {
                 Förläng medan det är aktivitet
               </label>
               
+              <label style={{ gridColumn: '1 / span 2' }}>
+                <input type="checkbox" checked={settings.burstFallback}
+                  onChange={e => setSettings(s => ({ ...s, burstFallback: e.target.checked }))}
+                  style={{ marginRight: 6 }} />
+                Fallback: spara stillbilder (burst)
+              </label>
+              <label>
+                Burst FPS
+                <input type="number" min={1} max={10} step={1} value={settings.burstFps}
+                  onChange={e => setSettings(s => ({ ...s, burstFps: Number(e.target.value) }))}
+                  style={{ width: '100%' }} />
+              </label>
+              <label>
+                Burst scale (0.1–1)
+                <input type="number" min={0.1} max={1} step={0.1} value={settings.burstScale}
+                  onChange={e => setSettings(s => ({ ...s, burstScale: Number(e.target.value) }))}
+                  style={{ width: '100%' }} />
+              </label>
               <label style={{ opacity: settings.extendOnActivity ? 1 : 0.5 }}>
                 Calm timeout (ms)
                 <input type="number" min={500} max={10000} step={100} value={settings.calmMs}
@@ -250,7 +271,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
     if (!enabled) return;
     let rafId, audioCtx, analyser, dataArray;
     let lastTrigger = 0;
-  const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs, extendOnActivity } = settings || {};
+  const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs, extendOnActivity, burstFallback, burstFps, burstScale } = settings || {};
     const recStartTsRef = { current: 0 };
     const lastActiveTsRef = { current: 0 };
 
@@ -321,7 +342,12 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
           // ignore and fall through
         }
         if (!picked) {
-          setStatus('Kunde inte starta inspelning lokalt. Viewer försöker spela in (fallback).');
+          // If we still can't record, optionally run burst-capture fallback
+          if (burstFallback) {
+            await runBurstCapture();
+          } else {
+            setStatus('Kunde inte starta inspelning lokalt. Viewer försöker spela in (fallback).');
+          }
           return;
         }
       }
@@ -373,7 +399,60 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         stopTimerRef.current = setTimeout(() => { try { recRef.current?.stop(); } catch {} }, maxMsEff + 50);
       } catch (e) {
         console.error('MediaRecorder error', e);
-        setStatus('Kunde inte starta inspelning lokalt. Viewer försöker spela in (fallback).');
+        if (burstFallback) {
+          await runBurstCapture();
+        } else {
+          setStatus('Kunde inte starta inspelning lokalt. Viewer försöker spela in (fallback).');
+        }
+      }
+    };
+
+    // Simple burst capture: capture JPEG frames to server if MediaRecorder not available
+    const runBurstCapture = async () => {
+      try {
+        const v = videoRef.current;
+        if (!v) { setStatus('Burst: ingen video'); return; }
+        const w = Math.max(64, Math.floor((v.videoWidth || 320) * (burstScale || 0.5)));
+        const h = Math.max(64, Math.floor((v.videoHeight || 180) * (burstScale || 0.5)));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d');
+        const totalMs = maxMs || 60000;
+        const interval = Math.max(100, Math.floor(1000 / (burstFps || 2)));
+        const startTs = Date.now();
+        const clipId = `${startTs}_burst`;
+        let seq = 0; let frames = 0;
+        setStatus('Burst: sparar stillbilder…');
+        while (Date.now() - startTs < totalMs) {
+          try {
+            ctx.drawImage(v, 0, 0, w, h);
+            const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.7));
+            if (blob) {
+              await fetch(`/api/upload-burst-frame?room=${encodeURIComponent(roomRef.current)}&clip=${encodeURIComponent(clipId)}&seq=${seq++}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'image/jpeg' },
+                body: blob
+              });
+              frames++;
+            }
+          } catch {}
+          await new Promise(r => setTimeout(r, interval));
+        }
+        // finalize
+        try {
+          await fetch('/api/finalize-burst', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ room: roomRef.current, clip: clipId, ts: startTs, fps: burstFps || 2, frames })
+          });
+          setStatus(`Burst klart (${frames} bilder)`);
+        } catch {
+          setStatus(`Burst klart (${frames} bilder), men kunde inte skapa manifest`);
+        }
+      } catch (e) {
+        setStatus('Burst misslyckades');
+      } finally {
+        recordingRef.current = false;
       }
     };
 
