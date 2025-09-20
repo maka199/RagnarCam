@@ -16,6 +16,8 @@ export default function Viewer({ room }) {
   const [clips, setClips] = useState([]);
   const [selectedClip, setSelectedClip] = useState(null);
   const [sharingSupport, setSharingSupport] = useState({ url: false, files: false });
+  const [talkbackOn, setTalkbackOn] = useState(false);
+  const micStreamRef = useRef(null);
 
   useEffect(() => {
     let ws, pc;
@@ -134,6 +136,35 @@ export default function Viewer({ room }) {
     }
   };
 
+  const toggleTalkback = async () => {
+    try {
+      const pc = pcRef.current;
+      const ws = wsRef.current;
+      if (!pc || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!talkbackOn) {
+        // start mic
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        micStreamRef.current = stream;
+        const track = stream.getAudioTracks()[0];
+        pc.addTrack(track, stream);
+        // renegotiate
+        ws.send(JSON.stringify({ type: 'renegotiate', room }));
+        setTalkbackOn(true);
+      } else {
+        // stop mic
+        const senders = pc.getSenders().filter(s => s.track && s.track.kind === 'audio');
+        senders.forEach(s => pc.removeTrack(s));
+        micStreamRef.current?.getTracks().forEach(t => t.stop());
+        micStreamRef.current = null;
+        // renegotiate
+        ws.send(JSON.stringify({ type: 'renegotiate', room }));
+        setTalkbackOn(false);
+      }
+    } catch (e) {
+      alert('Kunde inte hantera mikrofon: ' + (e?.message || e));
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -163,6 +194,7 @@ export default function Viewer({ room }) {
           setMuted(m => !m);
           try { await videoRef.current.play(); } catch {}
         }}>{muted ? 'Unmute' : 'Mute'}</button>
+        <button onClick={toggleTalkback} style={{ marginLeft: 8 }}>{talkbackOn ? 'Stäng mic (till monitor)' : 'Starta mic (till monitor)'}</button>
       </div>
       <div style={{ fontSize: 12, color: '#555' }}>Remote audio tracks: {audioInfo.count}</div>
       <div style={{ marginTop: 24, textAlign: 'left', maxWidth: 600, marginInline: 'auto' }}>

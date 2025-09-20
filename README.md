@@ -86,14 +86,20 @@ Alternativ B: Två tjänster (en för klient, en för signalering), sätt `VITE_
 Monitor-sidan har en checkbox “Autoinspelning (rörelse/ljud)”. När den är på:
 - En enkel rörelsedetektering körs via canvas-frame-diff på en nedskalad bild.
 - Ljudnivå mäts via Web Audio (RMS). Om rörelse eller ljud överstiger tröskelvärden startas en inspelning.
-- En kort inspelning (ca 8s) görs lokalt via `MediaRecorder` och laddas upp till servern.
-- För att undvika spam finns en cooldown (10s) mellan klipp.
+- Inspelningen använder ett “rullande stopp”: den fortsätter så länge aktivitet pågår, och stoppas när det har varit lugnt i X ms (calm timeout). Dessutom finns en maxlängd.
+- Standardinställningar: calm timeout 2000 ms, maxlängd 60 s, cooldown 10 s.
+- Alla trösklar och tider kan justeras i UI:t under “Inspelningsinställningar”.
 
 Klipp lagras på serverns filsystem under `server/clips/<room>/` och exponeras som URLs under `/clips/<room>/<fil>`. Viewer-sidan har en “Klipp”-sektion som listar och spelar upp klipp. API:n är:
 - `GET /api/clips/:room` – listar senaste klipp
 - `POST /api/upload-clip?room=...&ts=...&ext=webm|mp4` – rå binär kropp (Content-Type matchar filtyp)
 
 Viktigt om Render (gratisnivå): Render’s filsystem är ephemeralt och kan nollställas vid omdeploy/omstart. Det innebär att klipp inte är garanterat persistenta utan kostnad. Om du behöver beständig lagring, koppla upp mot ett kostnadsfritt eller lågkostnads-objektlager (t.ex. S3 kompatibelt). Vi kan lägga till en enkel S3-uppladdning senare om du vill.
+
+### Flera monitorer?
+I nuläget är rumsmodellen 1:1 (en monitor + en viewer per rum). Vill du köra flera monitorer samtidigt använder du separata rum (t.ex. “vardagsrum”, “hall”, “kök”) och öppnar motsvarande viewer för varje rum. 
+
+Framtida förbättring: Det går att bygga ut servern för flera monitorer i samma rum med val/byte i viewer, men det kräver utökad signalering (lista källor, selektera monitor, hantera kopplingar). Säg till om du vill att vi prioriterar det.
 
 ### Spara klipp till din enhet
 - I Viewer finns knappar för “Ladda ner” (hämtar filen lokalt) och “Dela” (via Web Share API om enheten stöder det). På iOS/Android öppnas då systemets delningsdialog.

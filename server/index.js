@@ -68,7 +68,7 @@ wss.on('connection', (ws) => {
     }
 
     // Route signaling between roles 1:1
-    if (type === 'offer' || type === 'answer' || type === 'ice-candidate') {
+    if (type === 'offer' || type === 'answer' || type === 'ice-candidate' || type === 'renegotiate') {
       if (ws.role === 'monitor') {
         // Forward to viewer
         safeSend(r.viewer, { type, payload });

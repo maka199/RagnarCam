@@ -4,6 +4,7 @@ import { getWsUrl, fetchIceServers } from './config';
 
 export default function Monitor({ room }) {
   const videoRef = useRef();
+  const remoteAudioRef = useRef();
   const wsRef = useRef();
   const pcRef = useRef();
   const [status, setStatus] = useState('Initierar kamera…');
@@ -16,6 +17,13 @@ export default function Monitor({ room }) {
   const [candidates, setCandidates] = useState(0);
   const [audioInfo, setAudioInfo] = useState({ count: 0, enabled: false });
   const [autoRec, setAutoRec] = useState(true);
+  const [settings, setSettings] = useState({
+    motionThresh: 20,     // pixel diff avg
+    audioThresh: 0.08,    // RMS
+    calmMs: 2000,         // stop N ms efter att aktivitet upphört
+    maxMs: 60000,         // max klipplängd (1 min)
+    cooldownMs: 10000     // min tid mellan klipp
+  });
   const canvasRef = useRef();
   const lastFrameRef = useRef(null);
   const recRef = useRef(null);
@@ -57,6 +65,16 @@ export default function Monitor({ room }) {
   pc.oniceconnectionstatechange = () => setIceState(pc.iceConnectionState);
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
+        pc.ontrack = (event) => {
+          // Receive viewer's audio (talkback)
+          const stream = event.streams[0];
+          if (event.track.kind === 'audio' && remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = stream;
+            // Try autoplay silently; may require user gesture to start
+            remoteAudioRef.current.play().catch(() => {});
+          }
+        };
+
         ws.onopen = () => {
           // Join as monitor
           ws.send(JSON.stringify({ type: 'join', role: 'monitor', room }));
@@ -73,6 +91,12 @@ export default function Monitor({ room }) {
           } else if (msg.type === 'answer') {
             await pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
             setStatus('Ansluten');
+          } else if (msg.type === 'renegotiate') {
+            // Viewer requests a fresh offer (e.g., to add/remove mic)
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: 'offer', room, payload: offer }));
+            setStatus('Renegotierar…');
           } else if (msg.type === 'ice-candidate') {
             try {
               await pc.addIceCandidate(msg.payload);
@@ -146,12 +170,13 @@ export default function Monitor({ room }) {
   };
 
   // Start motion/sound triggers when enabled
-  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, autoRec);
+  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, autoRec, settings);
 
   return (
     <div style={{ textAlign: 'center', marginTop: 40 }}>
       <h2>Monitor ({room})</h2>
       <video ref={videoRef} autoPlay playsInline muted style={{ width: '80%', maxWidth: 500 }} />
+  <audio ref={remoteAudioRef} controls style={{ display: 'block', margin: '8px auto' }} />
       <canvas ref={canvasRef} width={320} height={180} style={{ display: 'none' }} />
       <p>{status}</p>
       <div style={{ fontSize: 12, color: '#555' }}>
@@ -168,19 +193,53 @@ export default function Monitor({ room }) {
           Autoinspelning (rörelse/ljud)
         </label>
       </div>
+      {autoRec && (
+        <div style={{ marginTop: 16, fontSize: 14, textAlign: 'left', maxWidth: 520, marginInline: 'auto' }}>
+          <details>
+            <summary>Inspelningsinställningar</summary>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+              <label>Rörelsetröskel
+                <input type="number" min={1} max={150} step={1} value={settings.motionThresh}
+                  onChange={e => setSettings(s => ({ ...s, motionThresh: Number(e.target.value) }))}
+                  style={{ width: '100%' }} />
+              </label>
+              <label>Ljudtröskel (RMS)
+                <input type="number" min={0} max={0.5} step={0.01} value={settings.audioThresh}
+                  onChange={e => setSettings(s => ({ ...s, audioThresh: Number(e.target.value) }))}
+                  style={{ width: '100%' }} />
+              </label>
+              <label>Calm timeout (ms)
+                <input type="number" min={500} max={10000} step={100} value={settings.calmMs}
+                  onChange={e => setSettings(s => ({ ...s, calmMs: Number(e.target.value) }))}
+                  style={{ width: '100%' }} />
+              </label>
+              <label>Maxlängd (sek)
+                <input type="number" min={10} max={120} step={5} value={Math.round(settings.maxMs/1000)}
+                  onChange={e => setSettings(s => ({ ...s, maxMs: Number(e.target.value) * 1000 }))}
+                  style={{ width: '100%' }} />
+              </label>
+              <label>Cooldown (sek)
+                <input type="number" min={5} max={60} step={1} value={Math.round(settings.cooldownMs/1000)}
+                  onChange={e => setSettings(s => ({ ...s, cooldownMs: Number(e.target.value) * 1000 }))}
+                  style={{ width: '100%' }} />
+              </label>
+            </div>
+          </details>
+        </div>
+      )}
     </div>
   );
 }
 
 // Motion + audio trigger hook
-function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled) {
+function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled, settings) {
   useEffect(() => {
     if (!enabled) return;
     let rafId, audioCtx, analyser, dataArray;
     let lastTrigger = 0;
-    const motionThresh = 20; // avg diff threshold
-    const audioThresh = 0.08; // RMS threshold
-    const cooldownMs = 10000; // 10s between recordings
+    const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs } = settings || {};
+    const recStartTsRef = { current: 0 };
+    const lastActiveTsRef = { current: 0 };
 
     const startRecording = () => {
       if (recordingRef.current) return;
@@ -221,12 +280,13 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
             setStatus('Kunde inte ladda upp klipp');
           }
           recordingRef.current = false;
+          lastTrigger = Date.now();
         };
-        rec.start();
+        rec.start(1000); // gather data every second
         recordingRef.current = true;
+        recStartTsRef.current = Date.now();
+        lastActiveTsRef.current = recStartTsRef.current;
         setStatus('Inspelning startad…');
-        // Stop after 8 seconds
-        setTimeout(() => { try { rec.stop(); } catch {} }, 8000);
       } catch (e) {
         console.error('MediaRecorder error', e);
       }
@@ -260,9 +320,18 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
           }
           const motionHit = diff > motionThresh;
           const audioHit = rms > audioThresh;
-          if ((motionHit || audioHit) && now - lastTrigger > cooldownMs) {
-            lastTrigger = now;
-            startRecording();
+          const activeHit = motionHit || audioHit;
+          if (recordingRef.current) {
+            if (activeHit) lastActiveTsRef.current = now;
+            const recTooLong = now - recStartTsRef.current > (maxMs || 60000);
+            const calmEnough = now - lastActiveTsRef.current > (calmMs || 2000);
+            if (recTooLong || calmEnough) {
+              try { recRef.current?.stop(); } catch {}
+            }
+          } else {
+            if (activeHit && now - lastTrigger > (cooldownMs || 10000)) {
+              startRecording();
+            }
           }
         }
         lastFrameRef.current = frame;
@@ -289,5 +358,5 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
       cancelAnimationFrame(rafId);
       try { audioCtx?.close(); } catch {}
     };
-  }, [videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled]);
+  }, [videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled, settings]);
 }
