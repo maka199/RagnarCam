@@ -7,6 +7,7 @@ export default function Monitor({ room }) {
   const remoteAudioRef = useRef();
   const wsRef = useRef();
   const pcRef = useRef();
+  const startNowRef = useRef(null);
   const [status, setStatus] = useState('Initierar kamera…');
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
@@ -180,7 +181,7 @@ export default function Monitor({ room }) {
   };
 
   // Start motion/sound triggers when enabled
-  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, wsRef, autoRec, settings);
+  useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, wsRef, startNowRef, autoRec, settings);
 
   return (
     <div style={{ textAlign: 'center', marginTop: 40 }}>
@@ -196,6 +197,11 @@ export default function Monitor({ room }) {
         <button onClick={toggleMic} style={{ marginRight: 8 }}>{micOn ? 'Mute mic' : 'Unmute mic'}</button>
         <button onClick={toggleCam} style={{ marginRight: 8 }}>{camOn ? 'Stäng kamera' : 'Starta kamera'}</button>
         <button onClick={switchCamera}>Byt kamera</button>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <button onClick={() => { try { startNowRef.current?.(); } catch {} }}>
+          Spela in nu (test)
+        </button>
       </div>
       <div style={{ marginTop: 12 }}>
         <label style={{ fontSize: 14 }}>
@@ -273,6 +279,14 @@ export default function Monitor({ room }) {
               </label>
             </div>
           </details>
+          <details style={{ marginTop: 8 }}>
+            <summary>Diagnostik</summary>
+            <div style={{ fontSize: 12, marginTop: 6, color: '#444' }}>
+              <div>User-Agent: {navigator.userAgent}</div>
+              <div>WebM/VP8 stöds: {typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported ? (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus') ? 'ja' : 'nej') : 'okänt'}</div>
+              <div>WebM/VP9 stöds: {typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported ? (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'ja' : 'nej') : 'okänt'}</div>
+            </div>
+          </details>
         </div>
       )}
     </div>
@@ -280,11 +294,12 @@ export default function Monitor({ room }) {
 }
 
 // Motion + audio trigger hook
-function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, wsRef, enabled, settings) {
+function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, wsRef, startNowRef, enabled, settings) {
   useEffect(() => {
     if (!enabled) return;
     let rafId, audioCtx, analyser, dataArray;
     let lastTrigger = 0;
+  startNowRef.current = () => { startRecording(); };
   const { motionThresh, audioThresh, calmMs, maxMs, cooldownMs, extendOnActivity, burstFallback, burstFps, burstScale, legacyRecorder, recordVideoOnly } = settings || {};
     const recStartTsRef = { current: 0 };
     const lastActiveTsRef = { current: 0 };
@@ -456,7 +471,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
         if (burstFallback) {
           await runBurstCapture();
         } else {
-          setStatus('Kunde inte starta inspelning lokalt. Viewer försöker spela in (fallback).');
+          setStatus(`Kunde inte starta inspelning lokalt (${e?.name || ''} ${e?.message || ''}). Viewer försöker spela in (fallback).`);
         }
       }
     };
@@ -582,6 +597,7 @@ function useTriggers(videoRef, canvasRef, lastFrameRef, setStatus, recRef, recCh
     return () => {
       cancelAnimationFrame(rafId);
       try { audioCtx?.close(); } catch {}
+      try { if (startNowRef) startNowRef.current = null; } catch {}
     };
-  }, [videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, enabled, settings]);
+  }, [videoRef, canvasRef, lastFrameRef, setStatus, recRef, recChunksRef, recordingRef, roomRef, startNowRef, enabled, settings]);
 }
