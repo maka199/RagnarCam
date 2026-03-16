@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Monitor from './Monitor';
 import Viewer from './Viewer';
-import Flashcards from './Flashcards';
 import { fetchServerConfig } from './config';
 
 export default function App() {
@@ -26,8 +25,6 @@ export default function App() {
     })();
   }, []);
 
-  if (role === 'flashcards') return <Flashcards onBack={() => setRole(null)} />;
-
   if (!role) {
     return (
       <div style={{ textAlign: 'center', marginTop: 40 }}>
@@ -45,11 +42,6 @@ export default function App() {
           </button>
           <button disabled={!room} onClick={() => setRole('viewer')}>
             Anslut som Viewer
-          </button>
-        </div>
-        <div style={{ marginTop: 32, borderTop: '1px solid #ccc', paddingTop: 24 }}>
-          <button onClick={() => setRole('flashcards')} style={{ padding: '10px 24px', fontSize: 16 }}>
-            🃏 Flashcards
           </button>
         </div>
       </div>
